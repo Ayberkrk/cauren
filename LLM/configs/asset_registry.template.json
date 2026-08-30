@@ -1,0 +1,63 @@
+{
+  "version": "1.0.0",
+  "timezone_default": "Europe/Istanbul",
+  "assets": [
+    {
+      "asset_id": "tr_building_site01_blocka",
+      "site_id": "tr_building_site01",
+      "line_id": "parcel_a",
+      "machine_id": "structure_a",
+      "timezone": "Europe/Istanbul",
+      "dimensions": {
+        "structural_risk_score": {
+          "sensor_tag": "C01",
+          "unit": "ratio"
+        },
+        "inspection_finding_score": {
+          "sensor_tag": "C02",
+          "unit": "ratio"
+        },
+        "permit_status_score": {
+          "sensor_tag": "C03",
+          "unit": "ratio"
+        },
+        "construction_progress_pct": {
+          "sensor_tag": "C04",
+          "unit": "%"
+        },
+        "infrastructure_connection_score": {
+          "sensor_tag": "C05",
+          "unit": "ratio"
+        },
+        "natural_hazard_score": {
+          "sensor_tag": "C06",
+          "unit": "ratio"
+        },
+        "occupancy_safety_score": {
+          "sensor_tag": "C07",
+          "unit": "ratio"
+        },
+        "ground_stability_score": {
+          "sensor_tag": "C08",
+          "unit": "ratio"
+        },
+        "building_height_m": {
+          "sensor_tag": "C09",
+          "unit": "m"
+        },
+        "footprint_area_m2": {
+          "sensor_tag": "C10",
+          "unit": "m2"
+        }
+      },
+      "operators": [
+        {
+          "name": "civil_review_owner",
+          "role": "review_owner",
+          "email": "owner@example.com"
+        }
+      ],
+      "notes": "Fill this template for each civil asset or construction parcel that should have separate norms."
+    }
+  ]
+}

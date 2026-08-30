@@ -1,0 +1,45 @@
+{
+  "agent_id": "cauren-civil",
+  "asset_count": 3,
+  "dataset_id": "cauren_civil_us_public_core_v1",
+  "features": [
+    "structural_risk_score",
+    "inspection_finding_score",
+    "permit_status_score",
+    "construction_progress_pct",
+    "infrastructure_connection_score",
+    "natural_hazard_score",
+    "occupancy_safety_score",
+    "ground_stability_score",
+    "building_height_m",
+    "footprint_area_m2",
+    "soil_settlement_mm",
+    "utility_disruption_score"
+  ],
+  "license_posture": "public_research_reproducible",
+  "optional_features": [
+    "building_height_m",
+    "footprint_area_m2",
+    "soil_settlement_mm",
+    "utility_disruption_score"
+  ],
+  "required_features": [
+    "structural_risk_score",
+    "inspection_finding_score",
+    "permit_status_score",
+    "construction_progress_pct",
+    "infrastructure_connection_score",
+    "natural_hazard_score",
+    "occupancy_safety_score",
+    "ground_stability_score"
+  ],
+  "sampling_hz": 1.0,
+  "sector": "civil",
+  "source_csv": "data/public_sources/normalized/civil_public_core_assets.csv",
+  "splits": {
+    "test": 1,
+    "train": 1,
+    "validation": 1
+  },
+  "window_count": 3
+}

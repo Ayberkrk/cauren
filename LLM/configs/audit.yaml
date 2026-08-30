@@ -1,0 +1,32 @@
+audit:
+  reload_on_change: true
+  fail_primary: false
+decision_ledger:
+  enabled: true
+  retention_days: 365
+  timezone: Europe/Istanbul
+  sqlite_path: artifacts/audit/decision_ledger.sqlite3
+  jsonl_path: artifacts/audit/decision_ledger.jsonl
+  facility_export_dir: artifacts/audit/facility_ledgers
+  sinks:
+    - kind: memory
+      enabled: true
+      required: true
+    - kind: jsonl
+      enabled: true
+      required: true
+      path: artifacts/audit/audit_events.jsonl
+    - kind: sqlite
+      enabled: true
+      required: true
+      path: artifacts/audit/audit_events.sqlite3
+    - kind: http
+      enabled: false
+      required: false
+      endpoint: http://127.0.0.1:9900/audit
+      timeout_sec: 2.0
+    - kind: syslog
+      enabled: false
+      required: false
+      address: localhost
+      port: 514

@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "entries": [
+    {
+      "canonical_feature": "construction_progress_pct",
+      "aliases": ["site_progress_pct", "field_progress_pct"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "client_scope": ["client_civildemo", "site_civildemo"],
+      "unit_hints": {"pct": "%", "%": "%"},
+      "priority": 200
+    }
+  ]
+}

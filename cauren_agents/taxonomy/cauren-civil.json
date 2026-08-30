@@ -1,0 +1,49 @@
+{
+  "agent_id": "cauren-civil",
+  "version": "v1",
+  "groups": [
+    {
+      "group_id": "structural_risk",
+      "core_patterns": ["drift", "spike", "oscillation"],
+      "required_features": ["structural_risk_score", "ground_stability_score"],
+      "optional_context": ["risk_assessments", "geometry"],
+      "anomaly_ids": [
+        "structural_risk_escalation",
+        "ground_stability_deterioration",
+        "hazard_exposure_accumulation"
+      ]
+    },
+    {
+      "group_id": "construction_governance",
+      "core_patterns": ["drift", "nominal_variation"],
+      "required_features": ["permit_status_score", "construction_progress_pct"],
+      "optional_context": ["project_permit", "construction_status"],
+      "anomaly_ids": [
+        "permit_readiness_gap",
+        "construction_progress_stall",
+        "construction_compliance_misalignment"
+      ]
+    },
+    {
+      "group_id": "inspection_and_safety",
+      "core_patterns": ["spike", "drift"],
+      "required_features": ["inspection_finding_score", "occupancy_safety_score"],
+      "optional_context": ["inspection_findings", "administrative_unit"],
+      "anomaly_ids": [
+        "inspection_finding_escalation",
+        "occupancy_safety_exposure",
+        "review_queue_trigger"
+      ]
+    },
+    {
+      "group_id": "infrastructure_readiness",
+      "core_patterns": ["drift", "reconstruction"],
+      "required_features": ["infrastructure_connection_score", "construction_progress_pct"],
+      "optional_context": ["infrastructure_connections", "address"],
+      "anomaly_ids": [
+        "utility_readiness_delay",
+        "infrastructure_dependency_gap"
+      ]
+    }
+  ]
+}

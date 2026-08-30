@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rocket-llm"
+version = "0.1.0"
+description = "CAI-oriented advisory LLM scaffold for rocket fault explanation without training execution."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.11.0,<3.0.0",
+  "PyYAML>=6.0.2,<7.0.0",
+  "Jinja2>=3.1.5,<4.0.0",
+  "cryptography>=44.0.0,<45.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5,<9.0.0",
+]
+local_rag = [
+  "numpy>=1.26.0,<3.0.0",
+  "faiss-cpu>=1.8.0,<2.0.0",
+]
+pdf = [
+  "reportlab>=4.4.0,<5.0.0",
+  "pypdf>=6.0.0,<7.0.0",
+]
+ft_inference = [
+  "torch>=2.2.0,<3.0.0",
+  "transformers>=4.46.0,<5.0.0",
+  "peft>=0.13.0,<1.0.0",
+  "accelerate>=1.0.0,<2.0.0",
+]
+ft_training = [
+  "torch>=2.2.0,<3.0.0",
+  "transformers>=4.46.0,<5.0.0",
+  "peft>=0.13.0,<1.0.0",
+  "accelerate>=1.0.0,<2.0.0",
+  "datasets>=3.0.0,<4.0.0",
+  "trl>=0.11.0,<1.0.0",
+  "bitsandbytes>=0.43.0,<1.0.0",
+]
+
+[project.scripts]
+rocket-llm = "rocket_llm.cli:main"
+rocket-llm-generate-scenarios = "rocket_llm.dataset_cli:generate_scenarios_main"
+rocket-llm-import-notebooklm = "rocket_llm.dataset_cli:import_notebooklm_main"
+rocket-llm-validate-dataset = "rocket_llm.dataset_cli:validate_dataset_main"
+rocket-llm-merge-fault-kb = "rocket_llm.dataset_cli:merge_fault_kb_main"
+rocket-llm-merge-procedure-catalog = "rocket_llm.dataset_cli:merge_procedure_catalog_main"
+rocket-llm-prepare-qwen-sft = "rocket_llm.dataset_cli:prepare_qwen_sft_main"
+rocket-llm-rag-rebuild = "rocket_llm.no_train_cli:rag_rebuild_main"
+rocket-llm-advisory-test = "rocket_llm.no_train_cli:advisory_test_main"
+rocket-llm-quality-report = "rocket_llm.no_train_cli:quality_report_main"
+rocket-llm-local-api = "rocket_llm.no_train_cli:local_api_main"
+rocket-llm-local-api-finetuned = "rocket_llm.no_train_cli:local_api_finetuned_main"
+rocket-llm-review-ui = "rocket_llm.no_train_cli:review_ui_main"
+rocket-llm-evaluate-unseen-faults = "rocket_llm.no_train_cli:evaluate_unseen_faults_main"
+rocket-llm-integrated-advisory = "rocket_llm.no_train_cli:integrated_advisory_main"
+rocket-llm-generate-meeting-pdf = "rocket_llm.briefing:main"
+evaluate_unseen_faults = "rocket_llm.no_train_cli:evaluate_unseen_faults_main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rocket_llm"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+  "smoke: deterministic PR-safe integration smoke tests",
+  "integration: tests that require the Docker-served protocol-faithful backend",
+]

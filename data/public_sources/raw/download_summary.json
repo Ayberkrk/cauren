@@ -1,0 +1,18 @@
+{
+  "downloads": [
+    {
+      "license_note": "U.S. federal public data; cite FHWA and record the release year before redistribution.",
+      "sha256": "8ab541047e2c3afb157c6f4b1370d6cf72b9eff3ff23b38b4f4ec579c636ce59",
+      "source_id": "fhwa_nti",
+      "status": "downloaded",
+      "target_path": "data/public_sources/raw/2025NTI.xlsx"
+    },
+    {
+      "download_url": "https://www.census.gov/construction/bps/permitsbystate_cust.xls",
+      "reason": "http_404",
+      "source_id": "census_bps",
+      "status": "failed"
+    }
+  ],
+  "manifest": "data/public_sources/source_manifest.json"
+}

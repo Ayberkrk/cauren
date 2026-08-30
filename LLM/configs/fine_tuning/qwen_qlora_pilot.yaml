@@ -1,0 +1,32 @@
+job_name: "qwen25_7b_qlora_pilot"
+model_id: "Qwen/Qwen2.5-7B-Instruct"
+train_jsonl: "data/processed/qwen_sft_chat.jsonl"
+output_dir: "artifacts/fine_tune/qwen25_7b_qlora_pilot"
+
+max_seq_len: 1024
+num_train_epochs: 1
+learning_rate: 0.0002
+weight_decay: 0.01
+warmup_ratio: 0.03
+
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 16
+save_steps: 100
+logging_steps: 10
+
+seed: 42
+use_4bit: true
+bf16: true
+gradient_checkpointing: true
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - "q_proj"
+  - "k_proj"
+  - "v_proj"
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"

@@ -1,0 +1,1 @@
+# Cauren Civil Agent\n\nUse this namespace only when `selected_agent` is `cauren-civil`.\nFocus on building diagnostics, construction progress, permits, inspection findings, infrastructure readiness, hazard exposure, occupancy safety, and ground stability.\n

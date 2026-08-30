@@ -1,0 +1,4 @@
+asset_id,agent_id,sector,metadata_json
+us-bridge-0001,cauren-civil,civil,"{""asset_type"": ""bridge"", ""jurisdiction"": ""US"", ""source_bundle"": ""us_public_core""}"
+us-building-0002,cauren-civil,civil,"{""asset_type"": ""building"", ""jurisdiction"": ""US"", ""source_bundle"": ""us_public_core""}"
+us-site-0003,cauren-civil,civil,"{""asset_type"": ""construction_site"", ""jurisdiction"": ""US"", ""source_bundle"": ""us_public_core""}"

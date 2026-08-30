@@ -1,0 +1,62 @@
+{
+  "version": "v1",
+  "entries": [
+    {
+      "canonical_feature": "structural_risk_score",
+      "aliases": ["structural_risk", "building_risk_score", "structural_score"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 100
+    },
+    {
+      "canonical_feature": "inspection_finding_score",
+      "aliases": ["inspection_score", "inspection_findings_score", "finding_score"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 100
+    },
+    {
+      "canonical_feature": "permit_status_score",
+      "aliases": ["permit_score", "permit_readiness_score", "permit_status"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 100
+    },
+    {
+      "canonical_feature": "construction_progress_pct",
+      "aliases": ["construction_progress", "progress_pct", "build_progress_pct"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "unit_hints": {"pct": "%", "%": "%"},
+      "priority": 100
+    },
+    {
+      "canonical_feature": "infrastructure_connection_score",
+      "aliases": ["infrastructure_score", "utility_connection_score", "connection_readiness_score"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 95
+    },
+    {
+      "canonical_feature": "natural_hazard_score",
+      "aliases": ["hazard_score", "hazard_exposure_score", "natural_hazard_index"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 95
+    },
+    {
+      "canonical_feature": "occupancy_safety_score",
+      "aliases": ["occupancy_score", "occupancy_safety", "life_safety_score"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 95
+    },
+    {
+      "canonical_feature": "ground_stability_score",
+      "aliases": ["ground_stability", "soil_stability_score", "foundation_stability_score"],
+      "agent_scope": ["cauren-civil"],
+      "sector_scope": ["civil"],
+      "priority": 95
+    }
+  ]
+}

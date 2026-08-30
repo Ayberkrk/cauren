@@ -1,0 +1,65 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Secrets / local env config -- never commit real tokens
+.env
+.env.*
+!.env.example
+
+# AI assistant context file, not part of the public-facing project docs
+CLAUDE.md
+
+# Local virtual environments
+.venv/
+venv/
+LLM/.venv/
+Simulator/venv/
+
+# Runtime and generated outputs
+output/
+tmp/
+artifacts/
+runtime_outputs/
+LLM/output/
+LLM/artifacts/
+Hybrid-Model/results/
+Hybrid-Model/plots/
+Hybrid-Model/core/plots/
+XAI-Model/results/
+LLM/XAI-Model/results/
+catboost_info/
+Hybrid-Model/catboost_info/
+
+# Local runtime state
+*.log
+*.pid
+*.sqlite3
+
+# Large generated archives and bundles
+*.zip
+*.tar.gz
+
+# Large, reproducible-from-public-sources training datasets.
+# data/cauren_civil/ stays tracked (it's a tiny bundled example); the
+# real bridge dataset built from FHWA/USGS/FEMA sources is ~1.5GB and
+# regenerable, so it doesn't belong in git. See data/cauren_bridge/dataset_summary.json
+# for provenance and tools/ for the (re)build path.
+data/cauren_bridge/

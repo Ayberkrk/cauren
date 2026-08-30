@@ -1,0 +1,4 @@
+window_id,agent_id,sector,anomaly_type,anomaly_family,risk_score,confidence,label_source,event_start,event_end,root_cause_hint,notes,is_anomaly
+civil-00001,cauren-civil,civil,nominal_variation,nominal,0.63625,0.85,public_core_fusion_v1,2026-01-01T00:00:01Z,2026-01-01T00:00:06Z,structural_risk,source_bundle=us_public_core,false
+civil-00002,cauren-civil,civil,nominal_variation,nominal,0.1675,0.85,public_core_fusion_v1,2026-01-01T00:00:01Z,2026-01-01T00:00:06Z,natural_hazard,source_bundle=us_public_core,false
+civil-00003,cauren-civil,civil,nominal_variation,nominal,0.435,0.85,public_core_fusion_v1,2026-01-01T00:00:01Z,2026-01-01T00:00:06Z,structural_risk,source_bundle=us_public_core,false

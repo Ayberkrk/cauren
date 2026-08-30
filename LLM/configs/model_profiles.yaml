@@ -1,0 +1,24 @@
+metadata:
+  schema_version: "1.1.0"
+  constitution_version: "2.0.0"
+  model_version: "profiles-1.1.0"
+  prompt_template_version: "1.1.0"
+profiles:
+  edge:
+    mode: edge
+    model_family: "Explainer-1.3B"
+    model_version: "0.4.0"
+    backend_chain:
+      - "ollama-edge-primary"
+      - "fail-closed"
+    max_revisions: 1
+    confidence_cap_evidence_limited: 0.35
+  ground:
+    mode: ground
+    model_family: "Explainer-1.3B"
+    model_version: "0.4.0"
+    backend_chain:
+      - "ollama-ground-primary"
+      - "fail-closed"
+    max_revisions: 2
+    confidence_cap_evidence_limited: 0.35

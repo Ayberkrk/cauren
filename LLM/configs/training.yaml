@@ -1,0 +1,53 @@
+metadata:
+  schema_version: "1.2.0"
+  constitution_version: "2.0.0"
+  model_version: "training-2.0.0"
+  prompt_template_version: "1.1.0"
+jobs:
+  prepare_sft_dataset:
+    enabled: false
+    description: Convert structured advisory JSONL into chat-style SFT JSONL for supervised tuning.
+    input_jsonl: "data/processed/sft_fault_kb_merged.jsonl"
+    output_jsonl: "data/processed/qwen_sft_chat.jsonl"
+    feedback_training_jsonl: "data/feedback/decision_feedback_training.jsonl"
+    system_prompt: "You are a rocket fault assistant. Use only provided event/evidence fields and return strict JSON."
+  prepare_preference_dataset:
+    enabled: false
+    description: Export DPO-ready prompt/chosen/rejected JSONL from CAI pair artifacts.
+    input_pairs_jsonl: "artifacts/training/cai/cai_pairs.jsonl"
+    output_dpo_jsonl: "data/processed/qwen_dpo_pairs.jsonl"
+    min_score_gap: 0.02
+  run_cai_generation:
+    enabled: false
+    description: Generate draft->critique->revision CAI candidate pairs, critique records, and preference records.
+    input_jsonl: "data/processed/sft_fault_kb_merged.jsonl"
+    output_pairs_jsonl: "artifacts/training/cai/cai_pairs.jsonl"
+    output_preference_records_jsonl: "artifacts/training/cai/preference_records.jsonl"
+    output_critique_records_jsonl: "artifacts/training/cai/critique_records.jsonl"
+    constitution_path: "configs/constitution.yaml"
+    templates_path: "configs/templates.yaml"
+    compatibility_path: "configs/compatibility.yaml"
+    generation_mode: "live_with_fallback"
+    backend_runtime: "mock"
+    template_id: "explainer.ground"
+    model_family: "Explainer-1.3B"
+    model_version: "0.4.0"
+    draft_temperature: 0.2
+    revision_temperature: 0.05
+    max_tokens: 700
+    ollama_endpoint: "http://127.0.0.1:11434/api/generate"
+    ollama_model: "qwen2.5:7b-instruct"
+    hf_base_model_id: "Qwen/Qwen2.5-7B-Instruct"
+    hf_adapter_path: "artifacts/fine_tune/qwen25_7b_qlora_quality_v1/adapter-final"
+    max_records: 1200
+    seed: 42
+  run_dpo_training:
+    enabled: false
+    description: Execute DPO preference optimization from generated preference dataset.
+    script_path: "scripts/gcp/train_qwen_dpo.py"
+    dpo_config: "configs/fine_tuning/qwen_dpo_pilot.yaml"
+    train_jsonl: "data/processed/qwen_dpo_pairs.jsonl"
+    output_dir: "artifacts/fine_tune/qwen25_7b_dpo_pilot"
+    epochs: 1
+    learning_rate: 0.00001
+    dry_run: false

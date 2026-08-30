@@ -1,0 +1,4 @@
+asset_id,site_id,split,seq_len,sampling_hz,structural_risk_score,inspection_finding_score,permit_status_score,construction_progress_pct,infrastructure_connection_score,natural_hazard_score,occupancy_safety_score,ground_stability_score,building_height_m,footprint_area_m2,soil_settlement_mm,utility_disruption_score,asset_type,source_bundle,jurisdiction
+us-bridge-0001,site-us-01,train,8,1,0.82,0.76,0.35,41,0.52,0.66,0.48,0.39,24.5,820,14,0.42,bridge,us_public_core,US
+us-building-0002,site-us-01,validation,8,1,0.25,0.21,0.92,88,0.90,0.31,0.89,0.84,12.0,440,2,0.05,building,us_public_core,US
+us-site-0003,site-us-02,test,8,1,0.61,0.58,0.64,65,0.70,0.53,0.68,0.57,30.0,1300,9,0.18,construction_site,us_public_core,US

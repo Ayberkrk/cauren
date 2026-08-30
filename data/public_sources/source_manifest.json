@@ -1,0 +1,58 @@
+{
+  "version": "v1",
+  "sources": [
+    {
+      "source_id": "fhwa_nbi",
+      "title": "FHWA National Bridge Inventory",
+      "landing_page": "https://www.fhwa.dot.gov/bridge/nbi.cfm",
+      "license_note": "U.S. federal public data; cite FHWA and record the release year before redistribution.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    },
+    {
+      "source_id": "fhwa_nti",
+      "title": "FHWA National Tunnel Inventory",
+      "landing_page": "https://www.fhwa.dot.gov/bridge/inspection/tunnel/inventory/download.cfm",
+      "download_url": "https://www.fhwa.dot.gov/bridge/inspection/tunnel/inventory/download/2025NTI.xlsx",
+      "target_name": "2025NTI.xlsx",
+      "license_note": "U.S. federal public data; cite FHWA and record the release year before redistribution.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    },
+    {
+      "source_id": "census_bps",
+      "title": "U.S. Census Building Permits Survey",
+      "landing_page": "https://www.census.gov/construction/bps/",
+      "download_url": "https://www.census.gov/construction/bps/permitsbystate_cust.xls",
+      "target_name": "permitsbystate_cust.xls",
+      "license_note": "U.S. federal public data; cite the release table or API endpoint used.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    },
+    {
+      "source_id": "usgs_nshm",
+      "title": "USGS National Seismic Hazard Model",
+      "landing_page": "https://www.usgs.gov/programs/earthquake-hazards/science/national-seismic-hazard-model",
+      "license_note": "U.S. federal public data; preserve USGS attribution and model vintage.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    },
+    {
+      "source_id": "usgs_landslide",
+      "title": "USGS Landslide Hazards",
+      "landing_page": "https://www.usgs.gov/programs/landslide-hazards",
+      "license_note": "U.S. federal public data; preserve USGS attribution and map version.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    },
+    {
+      "source_id": "nrcs_ssurgo",
+      "title": "USDA NRCS SSURGO",
+      "landing_page": "https://www.nrcs.usda.gov/resources/data-and-reports/soil-survey-geographic-database-ssurgo",
+      "license_note": "U.S. federal public data; cite NRCS and the extraction date.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    },
+    {
+      "source_id": "noaa_slr",
+      "title": "NOAA Sea Level Rise Viewer",
+      "landing_page": "https://coast.noaa.gov/slr/",
+      "license_note": "Planning reference data only; not a permitting or legal boundary product.",
+      "bundled_example": "normalized/civil_public_core_assets.csv"
+    }
+  ]
+}

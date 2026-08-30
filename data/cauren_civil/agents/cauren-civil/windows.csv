@@ -1,0 +1,4 @@
+window_id,agent_id,sector,asset_id,client_id,site_id,window_start,window_end,sampling_hz,seq_len,sensor_count,missing_ratio,quality_score,split,training_role
+civil-00001,cauren-civil,civil,us-bridge-0001,public_research,site-us-01,2026-01-01T00:00:00Z,2026-01-01T00:00:07Z,1.0,8,12,0.0,1.0,train,mae_reconstruction
+civil-00002,cauren-civil,civil,us-building-0002,public_research,site-us-01,2026-01-01T00:00:00Z,2026-01-01T00:00:07Z,1.0,8,12,0.0,1.0,validation,mae_reconstruction
+civil-00003,cauren-civil,civil,us-site-0003,public_research,site-us-02,2026-01-01T00:00:00Z,2026-01-01T00:00:07Z,1.0,8,12,0.0,1.0,test,mae_reconstruction

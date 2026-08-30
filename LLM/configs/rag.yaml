@@ -1,0 +1,12 @@
+metadata:
+  schema_version: "1.1.0"
+  constitution_version: "2.0.0"
+  model_version: "rag-1.1.0"
+  prompt_template_version: "1.1.0"
+rag:
+  dataset_path: "data/processed/sft_fault_kb_merged.jsonl"
+  sqlite_path: "artifacts/rag/rag_chunks.sqlite3"
+  index_path: "artifacts/rag/rag.index"
+  top_k: 5
+  max_context_chars: 8000
+  embedding_dim: 256
