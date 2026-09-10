@@ -19,7 +19,6 @@ class CaurenCoreRuntime:
 
     def __init__(self, *, backbone: CaurenHybridBackbone | None = None):
         self.backbone = backbone or CaurenHybridBackbone.from_env()
-        self._last_backbone_metadata: dict = {}
 
     def calibrate(
         self,
@@ -28,6 +27,29 @@ class CaurenCoreRuntime:
         sampling_hz: float = 1.0,
         runtime_mode: str | None = None,
     ) -> tuple[tuple[float, ...], ...]:
+        calibrated, _ = self._calibrate_with_metadata(
+            window,
+            sampling_hz=sampling_hz,
+            runtime_mode=runtime_mode,
+        )
+        return calibrated
+
+    def _calibrate_with_metadata(
+        self,
+        window: SensorWindow,
+        *,
+        sampling_hz: float = 1.0,
+        runtime_mode: str | None = None,
+    ) -> tuple[tuple[tuple[float, ...], ...], dict]:
+        """Calibrate and report which backbone produced the result.
+
+        The metadata is returned rather than stashed on the instance: a
+        single CaurenPipeline (and so a single runtime) is shared across
+        concurrent requests by the API, which dispatches diagnoses through
+        a threadpool. Instance-level "last call" state would let one
+        request read another's -- or an already-reset empty -- metadata.
+        """
+        backbone_metadata: dict = {}
         if self.backbone is not None:
             try:
                 calibrated, _ = self.backbone.calibrate(
@@ -35,23 +57,14 @@ class CaurenCoreRuntime:
                     sampling_hz=sampling_hz,
                     runtime_mode=runtime_mode,
                 )
-                self._last_backbone_metadata = {
-                    **self.backbone.metadata,
-                    "used": True,
-                    "fallback": False,
-                }
-                return calibrated
+                return calibrated, {**self.backbone.metadata, "used": True, "fallback": False}
             except HybridBackboneUnavailable:
-                self._last_backbone_metadata = {
-                    **self.backbone.metadata,
-                    "used": False,
-                    "fallback": True,
-                }
+                backbone_metadata = {**self.backbone.metadata, "used": False, "fallback": True}
 
         matrix = [list(row) for row in window.matrix]
         mask = [list(row) for row in window.presence_mask]
         if not matrix:
-            return tuple()
+            return tuple(), backbone_metadata
         calibrated = [list(row) for row in matrix]
         width = len(matrix[0])
         for idx in range(width):
@@ -68,9 +81,9 @@ class CaurenCoreRuntime:
                     continue
                 delta = max(-3.0 * spread, min(3.0 * spread, row[idx] - baseline))
                 calibrated[row_idx][idx] = baseline + delta
-        if not self._last_backbone_metadata:
-            self._last_backbone_metadata = {"name": "statistical_core", "used": True, "fallback": False}
-        return tuple(tuple(float(value) for value in row) for row in calibrated)
+        if not backbone_metadata:
+            backbone_metadata = {"name": "statistical_core", "used": True, "fallback": False}
+        return tuple(tuple(float(value) for value in row) for row in calibrated), backbone_metadata
 
     def classify(
         self,
@@ -84,8 +97,11 @@ class CaurenCoreRuntime:
         mask = [list(row) for row in window.presence_mask]
         context = context or {}
         profile = risk_profile(str(context.get("selected_agent_id") or ""))
-        self._last_backbone_metadata = {}
-        calibrated = self.calibrate(window, sampling_hz=sampling_hz, runtime_mode=runtime_mode)
+        calibrated, backbone_metadata = self._calibrate_with_metadata(
+            window,
+            sampling_hz=sampling_hz,
+            runtime_mode=runtime_mode,
+        )
         if not matrix or not any(any(row) for row in mask):
             return CoreOutput(
                 anomaly_type="insufficient_observation",
@@ -98,7 +114,7 @@ class CaurenCoreRuntime:
                 spike_score=0.0,
                 oscillation_score=0.0,
                 calibrated_matrix=calibrated,
-                backbone_metadata=dict(self._last_backbone_metadata),
+                backbone_metadata=dict(backbone_metadata),
             )
 
         # A single real observation gets repeated by the adapter to fill
@@ -122,7 +138,7 @@ class CaurenCoreRuntime:
                 spike_score=0.0,
                 oscillation_score=0.0,
                 calibrated_matrix=calibrated,
-                backbone_metadata=dict(self._last_backbone_metadata),
+                backbone_metadata=dict(backbone_metadata),
             )
 
         residual_values = [
@@ -346,8 +362,7 @@ class CaurenCoreRuntime:
             "contextual_anomaly": min(1.0, contextual_score),
             "seasonal_deviation": min(1.0, seasonal_score),
         }
-        raw_anomaly_type = max(raw_scores, key=raw_scores.get)
-        raw_top_score = float(raw_scores[raw_anomaly_type])
+        raw_anomaly_type = max(raw_scores.items(), key=lambda item: item[1])[0]
         weighted_scores = {
             key: max(0.0, min(1.0, float(value) * float(profile.pattern_weights.get(key, 1.0))))
             for key, value in raw_scores.items()
@@ -357,7 +372,7 @@ class CaurenCoreRuntime:
                 weighted_scores.get("calibration_bias", 0.0),
                 min(1.0, calibration_bias_baseline),
             )
-        anomaly_type = max(weighted_scores, key=weighted_scores.get)
+        anomaly_type = max(weighted_scores.items(), key=lambda item: item[1])[0]
         top_score = float(weighted_scores[anomaly_type])
         if top_score < 0.08 and reconstruction_error < 0.08:
             anomaly_type = "nominal_variation"
@@ -403,7 +418,7 @@ class CaurenCoreRuntime:
             calibrated_matrix=calibrated,
             raw_risk_score=float(raw_risk_score),
             calibrated_risk_score=float(risk_score),
-            backbone_metadata=dict(self._last_backbone_metadata),
+            backbone_metadata=dict(backbone_metadata),
         )
 
 

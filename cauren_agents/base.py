@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from cauren_agents.diagnostics import diagnose_taxonomy, _normalize_feature_hint_value
+from cauren_agents.diagnostics import diagnose_taxonomy
 from cauren_agents.taxonomy_loader import load_agent_taxonomy
 from cauren_core.contracts import (
     AgentCandidate,
@@ -88,10 +88,8 @@ class SectorAgent:
             agent_outputs={
                 **dict(physics_evidence.agent_outputs),
                 **self._agent_outputs(
-                    core_output,
-                    physics_evidence,
                     route,
-                    window,
+                    taxonomy=taxonomy,
                     taxonomy_match=taxonomy_match,
                 ),
             },
@@ -116,16 +114,12 @@ class SectorAgent:
 
     def _agent_outputs(
         self,
-        core_output: CoreOutput,
-        physics_evidence: PhysicsEvidence,
         route: AgentRoute,
-        window: SensorWindow,
         *,
-        taxonomy_match: dict | None = None,
+        taxonomy: tuple[dict, ...],
+        taxonomy_match: dict,
     ) -> dict:
-        taxonomy = load_agent_taxonomy(self.schema.agent_id)
         version = str(taxonomy[0].get("taxonomy_version") or "") if taxonomy else ""
-        resolved_taxonomy_match = taxonomy_match if taxonomy_match is not None else _match_taxonomy_diagnosis(taxonomy, core_output, physics_evidence, window)
         outputs = {
             "route_confidence": round(float(route.confidence), 6),
             "route_reason": route.reason,
@@ -152,29 +146,9 @@ class SectorAgent:
             "sector_risk_threshold": round(float(sector_threshold(self.schema.agent_id)), 6),
             "agent_taxonomy_count": len(taxonomy),
             "agent_taxonomy_version": version,
-            "agent_taxonomy_diagnosis": resolved_taxonomy_match,
+            "agent_taxonomy_diagnosis": taxonomy_match,
         }
         return outputs
-
-
-def series(window: SensorWindow, feature: str) -> list[float] | None:
-    for idx, metadata in enumerate(window.features):
-        if metadata.name == feature and any(row[idx] for row in window.presence_mask):
-            return [float(row[idx]) for row in window.matrix]
-    return None
-
-
-def latest(window: SensorWindow, feature: str) -> float | None:
-    values = series(window, feature)
-    if values is None or len(values) == 0:
-        return None
-    return float(values[-1])
-
-
-def relation(name: str, score: float, detail: str, **extra) -> dict:
-    payload = {"name": name, "score": round(float(max(0.0, min(1.0, score))), 6), "detail": detail}
-    payload.update(extra)
-    return payload
 
 
 def _match_taxonomy_diagnosis(
@@ -189,13 +163,3 @@ def _match_taxonomy_diagnosis(
         physics_evidence=physics_evidence,
         window=window,
     )
-
-
-def _window_latest_feature_values(window: SensorWindow) -> dict[str, float]:
-    values: dict[str, float] = {}
-    for feature in window.features:
-        value = latest(window, feature.name)
-        if value is not None:
-            values[feature.name] = float(value)
-    return values
-

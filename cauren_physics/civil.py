@@ -212,6 +212,34 @@ class CivilPhysics(DomainPhysics):
                 )
             )
 
+        # Optional operational modal analysis (OMA) input: a caller that has
+        # already run cauren_physics.oma.compare_to_baseline on the
+        # structure's vibration data can pass its result dict here. A
+        # dropping natural frequency versus baseline is a standard
+        # structural-health early-warning sign (stiffness loss), so it
+        # folds into structural_reliability rather than sitting off to the
+        # side as an unrelated signal.
+        oma_drift = context.get("oma_frequency_drift") if isinstance(context, dict) else None
+        if isinstance(oma_drift, dict) and oma_drift.get("max_drop_pct") is not None:
+            max_drop_pct = float(oma_drift["max_drop_pct"])
+            severity = str(oma_drift.get("overall_severity") or "none")
+            # 15% frequency drop maps to full-strength evidence; below that,
+            # scale down linearly so a small drop reads as mild concern.
+            score = max(0.0, min(1.0, max_drop_pct / 15.0))
+            if score > 0.0:
+                subsystem_scores["structural_reliability"] = max(
+                    subsystem_scores["structural_reliability"], score
+                )
+                relations.append(
+                    build_relation(
+                        "modal_frequency_drift",
+                        score,
+                        "Yapinin dogal frekansinda taban degere gore dusus, olasi rijitlik kaybina isaret eder.",
+                        max_drop_pct=round(max_drop_pct, 6),
+                        severity=severity,
+                    )
+                )
+
         risk = max(subsystem_scores.values(), default=0.0)
         return self.evidence(
             schema=schema,

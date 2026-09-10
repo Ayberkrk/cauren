@@ -158,15 +158,6 @@ class AgentCandidate:
 
 
 @dataclass(frozen=True)
-class SectorPrior:
-    agent_id: str
-    score: float
-    confidence: float
-    provenance: tuple[str, ...] = ()
-    ingress_tags: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class SectorScoreBreakdown:
     agent_id: str
     sector: str
@@ -196,18 +187,6 @@ class SectorScoreBreakdown:
             "ingress_tags": list(self.ingress_tags),
             "prior_conflict": bool(self.prior_conflict),
         }
-
-
-@dataclass(frozen=True)
-class SectorFusionDecision:
-    selected_agent_id: str
-    selected_sector: str
-    selected_score: float
-    selected_prior: float
-    selection_strategy: str
-    needs_context: bool = False
-    prior_conflict: bool = False
-    conflict_reason: str = ""
 
 
 @dataclass(frozen=True)

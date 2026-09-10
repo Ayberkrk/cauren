@@ -6,21 +6,37 @@ worth more here than polish.
 
 ## Getting set up
 
+Running the test suite needs only these:
+
 ```bash
-pip install fastapi pydantic pytest httpx numpy pandas psutil uvicorn pyyaml torch
+pip install fastapi pydantic pytest httpx numpy
 python3 -m pytest tests/
 ```
 
-All 36 tests should pass with no network access and no GPU. If you are
-working on the `cauren-bridge` backbone, you also need `torch` and, to
-rebuild the dataset from scratch, `pandas`, `pyarrow`, and `scipy`.
+All 84 tests should pass with no network access and no GPU, and without
+`torch` installed. Add `psutil` and `uvicorn` to run the API itself. If
+you are working on the `cauren-bridge` backbone you also need `torch`,
+`pyyaml` for the `LLM/` sub-project, and, to rebuild the bridge dataset
+from scratch, `pandas`, `pyarrow`, and `scipy`.
 
 Read `README.md` and `operations/CAUREN_CORE_AGENT_ARCHITECTURE.md`
-first. Together they document the architecture, the data flow, and a
-key invariant: the civil feature list is duplicated across
+first. Together they document the architecture and the data flow.
+
+## Two invariants worth knowing before you change anything
+
+**The civil feature list is duplicated on purpose.** It lives in
 `cauren_agents/civil/agent.py`, `tools/build_cauren_civil_dataset.py`,
-`tools/audit_cauren_data_quality.py`, and `data/public_sources/README.md`.
-If you touch one, update all four.
+`tools/audit_cauren_data_quality.py`, and
+`data/public_sources/README.md`. If you touch one, update all four.
+
+**The pipeline must stay safe to call concurrently.** The API keeps a
+single `CaurenPipeline` on `app.state` and dispatches every
+diagnose/calibrate call through a threadpool, so anything reachable
+from `CaurenPipeline.diagnose` is shared across in-flight requests. Do
+not store per-request state on `CaurenPipeline`, `CaurenCoreRuntime`, or
+anything they hold; return it instead. This was a real bug once (one
+request could read another's backbone metadata), and
+`tests/test_pipeline_concurrency.py` exists to keep it from coming back.
 
 ## What kind of contributions are useful right now
 

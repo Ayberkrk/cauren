@@ -123,6 +123,41 @@ This project is a working research prototype, not a finished product.
   time, physics-relation reasoning between scores, and an explainable
   diagnosis, not score generation from raw measurements.
 
+## What ships with every diagnosis
+
+Beyond the risk score itself, each diagnosis carries the checks that were
+run on the way to it, so a reviewer can see how much to trust it:
+
+| Output key | What it answers |
+|---|---|
+| `quality_control` | Were the inputs usable? Required-feature completeness, unit-range sanity, flatline/stuck sensors, how many sensor names failed to normalize, how many raw readings were rejected. |
+| `uncertainty_report` | How much should the score be trusted? A confidence band around the risk score derived from data quality, the core's own confidence, and how much of the physics schema had evidence. |
+| `physics_evidence` | Why is the score what it is? The domain relations that fired, and which required features were missing. |
+
+Structural-health inputs are optional and separate. `cauren_physics/oma.py`
+identifies a structure's natural frequencies and damping from an ambient
+vibration series (peak-picking operational modal analysis), and
+`cauren_physics/fe_reference_model.py` computes what a shear-building
+mass/stiffness model predicts those frequencies should be. Comparing the
+two is a theory-vs-data consistency check; a measured frequency dropping
+below the baseline is read as possible stiffness loss and folded into the
+civil physics layer's `structural_reliability` signal.
+
+```bash
+# Full explainable review over real data (repo ships a small public dataset)
+python3 tools/run_explainable_review.py \
+  --wide-csv data/public_sources/normalized/civil_public_core_assets.csv
+
+# ...or from a raw sensor feed, with a modal-drift check folded in
+python3 tools/run_explainable_review.py \
+  --sensors-json my_sensors.json \
+  --vibration-csv my_vibration.csv --sampling-hz 100 \
+  --baseline-frequencies-hz 2.01
+```
+
+These are decision-support signals for routing an asset to a human
+reviewer, not damage verdicts.
+
 ## Repository layout
 
 | Path | What it is |
@@ -133,7 +168,7 @@ This project is a working research prototype, not a finished product.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (36 tests) |
+| `tests/` | Test suite (84 tests) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -155,7 +190,7 @@ All non-health routes require a bearer token (see Quick start).
 
 ```bash
 pip install fastapi pydantic pytest httpx numpy pandas psutil uvicorn pyyaml torch
-python3 -m pytest tests/            # 36 tests, no network/GPU required
+python3 -m pytest tests/            # 84 tests, no network/GPU required
 python3 api/app.py                  # or: uvicorn api.app:app --reload
 ```
 

@@ -131,6 +131,41 @@ def test_diagnose_accepts_civil_sensor_payload(client):
     assert body["meta"]["architecture"] == "cauren_core_civil_agent"
 
 
+def test_diagnose_response_carries_quality_control_and_uncertainty(client):
+    """Both layers are computed in the pipeline; this pins that they survive
+    the API's response shaping and actually reach HTTP clients.
+    """
+    resp = client.post("/diagnose", json=_sensor_payload())
+    assert resp.status_code == 200
+    body = resp.json()
+
+    quality = body["quality_control"]
+    assert quality["status"] in {"pass", "warn", "fail"}
+    assert 0.0 <= quality["score"] <= 1.0
+    assert isinstance(quality["findings"], list)
+    assert quality["feature_completeness"]
+
+    uncertainty = body["uncertainty_report"]
+    assert 0.0 <= uncertainty["uncertainty_score"] <= 1.0
+    assert uncertainty["lower_bound"] <= uncertainty["point_estimate"] <= uncertainty["upper_bound"]
+    assert {factor["name"] for factor in uncertainty["factors"]} == {
+        "data_quality",
+        "model_confidence",
+        "evidence_coverage",
+    }
+
+
+def test_calibrate_response_carries_quality_control(client):
+    """/calibrate exists to inspect what the pipeline made of a payload
+    without running physics, so the input-quality verdict belongs in it too.
+    """
+    resp = client.post("/calibrate", json=_sensor_payload())
+    assert resp.status_code == 200
+    quality = resp.json()["quality_control"]
+    assert quality["status"] in {"pass", "warn", "fail"}
+    assert quality["checks_run"]
+
+
 def test_diagnose_building_payload_forces_civil_agent(client):
     payload = {
         **_cbs_record("bina-002"),

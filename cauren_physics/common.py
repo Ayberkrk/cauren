@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import mean
 from typing import Any
 
 from cauren_core.contracts import AgentSchema, PhysicsEvidence, SensorWindow
@@ -14,13 +13,6 @@ def latest(window: SensorWindow, feature: str) -> float | None:
     return None
 
 
-def series(window: SensorWindow, feature: str) -> list[float]:
-    for idx, metadata in enumerate(window.features):
-        if metadata.name == feature and any(row[idx] for row in window.presence_mask):
-            return [float(row[idx]) for row in window.matrix]
-    return []
-
-
 def build_relation(name: str, score: float, detail: str, **extra: Any) -> dict[str, Any]:
     payload = {
         "name": name,
@@ -29,18 +21,6 @@ def build_relation(name: str, score: float, detail: str, **extra: Any) -> dict[s
     }
     payload.update(extra)
     return payload
-
-
-def spread(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    return max(values) - min(values)
-
-
-def safe_ratio(num: float, den: float) -> float:
-    if abs(den) <= 1e-6:
-        return 0.0
-    return num / den
 
 
 def measurement_quality_penalty(window: SensorWindow) -> tuple[float, dict[str, Any]] | None:
@@ -103,9 +83,3 @@ class DomainPhysics:
             notes=notes,
             agent_outputs=outputs,
         )
-
-
-def mean_abs(values: list[float]) -> float:
-    if not values:
-        return 0.0
-    return mean(abs(value) for value in values)

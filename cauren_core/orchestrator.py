@@ -10,7 +10,9 @@ from .adapter import AgentSchemaAdapter, parse_sensor_readings
 from .contracts import AgentCandidate, CaurenDiagnosis, NormalizationTrace, SectorScoreBreakdown
 from .normalization import FeatureNormalizer
 from cauren_agents.base import AgentRoute
+from .quality_control import evaluate_quality
 from .runtime import CaurenCoreRuntime
+from .uncertainty import estimate_uncertainty
 
 
 class CaurenPipeline:
@@ -157,6 +159,11 @@ class CaurenPipeline:
                 "control_mode": payload.get("control_mode") or "guarded_auto",
                 "sensor_schema_version": payload.get("sensor_schema_version") or agent.schema.version,
                 "core_output": core_output,
+                # Optional: the result of cauren_physics.oma.compare_to_baseline
+                # (e.g. from tools/run_oma_identification.py), as a dict. Lets a
+                # caller fold sensor-derived modal-frequency drift evidence into
+                # the same diagnosis instead of running physics evaluation twice.
+                "oma_frequency_drift": payload.get("oma_frequency_drift") or {},
             },
         )
         diagnosis = agent.compose_result(
@@ -165,8 +172,18 @@ class CaurenPipeline:
             route=route,
             window=window,
         )
+        quality_report = evaluate_quality(window, agent.schema, normalization_trace)
+        uncertainty_report = estimate_uncertainty(
+            risk_score=diagnosis.risk_score,
+            core_confidence=core_output.confidence,
+            quality_report=quality_report,
+            schema=agent.schema,
+            missing_features=physics_evidence.missing_features,
+        )
         merged_outputs = dict(diagnosis.agent_outputs)
         merged_outputs.update(self._normalization_outputs(normalization_trace))
+        merged_outputs["quality_control"] = quality_report.to_dict()
+        merged_outputs["uncertainty_report"] = uncertainty_report.to_dict()
         return replace(diagnosis, agent_outputs=merged_outputs)
 
     def calibrate(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -176,7 +193,9 @@ class CaurenPipeline:
             sampling_hz=float(payload.get("sampling_hz") or 1.0),
             runtime_mode=str(payload.get("runtime_mode") or "") or None,
         )
+        quality_report = evaluate_quality(window, agent.schema, normalization_trace)
         return {
+            "quality_control": quality_report.to_dict(),
             "selected_agent": agent.schema.agent_id,
             "candidate_agents": [
                 {"agent_id": c.agent_id, "score": round(float(c.score), 6), "reason": c.reason}

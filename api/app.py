@@ -30,12 +30,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-_BOOTSTRAP_CAUREN_CORE_RUNTIME = str(os.getenv("CAUREN_RUNTIME_MODE", "cauren_core")).strip().lower() in {
-    "cauren",
-    "cauren_core",
-    "core_agents",
-    "civil_agent",
-}
+CAUREN_CORE_RUNTIME_MODES = {"cauren", "cauren_core", "core_agents", "civil_agent"}
+
+_BOOTSTRAP_CAUREN_CORE_RUNTIME = (
+    str(os.getenv("CAUREN_RUNTIME_MODE", "cauren_core")).strip().lower() in CAUREN_CORE_RUNTIME_MODES
+)
 
 try:
     import numpy as np
@@ -3260,7 +3259,7 @@ def _sync_cauren_calibrate(request: Request, payload: CalibrateIn, explain: bool
             "sector_requested": payload.sector,
             "sensor_schema_version": payload.sensor_schema_version,
             "calibration_mode": "cauren_core_agent_schema",
-                        "explain": bool(explain),
+            "explain": bool(explain),
         }
         meta.update(_asset_resolution_meta(resolution))
         return {
@@ -3283,6 +3282,10 @@ def _sync_cauren_calibrate(request: Request, payload: CalibrateIn, explain: bool
                 "rejected_sample_count": len(result["rejected_samples"]),
                 "router_confidence": result["confidence"],
             },
+            # The same input-quality checks /diagnose reports. Surfacing them
+            # here is the point of /calibrate: inspecting what the pipeline
+            # made of a payload without paying for physics evaluation.
+            "quality_control": result.get("quality_control", {}),
             "selected_agent": result["selected_agent"],
             "candidate_agents": result["candidate_agents"],
             "rejected_samples": result["rejected_samples"],
@@ -3824,14 +3827,6 @@ def _sync_cauren_diagnose(request: Request, payload: DiagnoseIn, explain: bool):
 
 
 
-CAUREN_CORE_RUNTIME_MODES = {"cauren", "cauren_core", "core_agents", "civil_agent"}
-
-
-def _is_cauren_core_runtime_mode() -> bool:
-    mode = str(os.getenv("CAUREN_RUNTIME_MODE", "")).strip().lower()
-    return mode in CAUREN_CORE_RUNTIME_MODES
-
-
 def _load_cauren_core_agent_runtime(base_dir: Path) -> None:
     from cauren_core import CaurenPipeline
     from cauren_core.tenant_runtime import load_tenant_runtime_config_from_env
@@ -3874,7 +3869,6 @@ def _load_cauren_core_agent_runtime(base_dir: Path) -> None:
     app.state.model = None
     app.state.fast_model = None
     app.state.fast_model_enabled = False
-    app.state.model_lock = threading.RLock()
     app.state.asset_contexts = {}
     app.state.asset_contexts_lock = threading.RLock()
     app.state.metrics = RuntimeMetrics()
@@ -3924,7 +3918,12 @@ def _load_cauren_core_agent_runtime(base_dir: Path) -> None:
     app.state.inference_queue_degrade_threshold = int(os.getenv("INFERENCE_QUEUE_DEGRADE_THRESHOLD", "220"))
     app.state.inference_queue_protect_threshold = int(os.getenv("INFERENCE_QUEUE_PROTECT_THRESHOLD", "250"))
 
-    app.state.report_worker_mode = "external"
+    # "external" (the default) means another process drains report_queue and
+    # _report_worker below is not started in-process. Set
+    # REPORT_WORKER_MODE=internal to run it as a background thread here.
+    app.state.report_worker_mode = (
+        "internal" if os.getenv("REPORT_WORKER_MODE", "external").strip().lower() == "internal" else "external"
+    )
     app.state.report_worker_stop = threading.Event()
     app.state.report_worker = None
     app.state.traffic_node = os.getenv("TRAFFIC_NODE_NAME", socket.gethostname())
@@ -3932,7 +3931,11 @@ def _load_cauren_core_agent_runtime(base_dir: Path) -> None:
     app.state.active_traffic_node_override = os.getenv("ACTIVE_TRAFFIC_NODE", "auto")
     app.state.receiving_traffic_recently_flag = False
 
-    app.state.state_store_enabled = False
+    # Off by default: with the store disabled both _persist_runtime_state_if_due
+    # and _restore_runtime_state no-op, and the service keeps all runtime state
+    # in memory only. Set STATE_STORE_ENABLED=true to persist guard/asset state
+    # across restarts.
+    app.state.state_store_enabled = os.getenv("STATE_STORE_ENABLED", "false").strip().lower() == "true"
     app.state.state_store_path = _resolve_writable_file_path(
         Path(os.getenv("STATE_STORE_PATH", str(maintenance_dir / "runtime_state_store.json"))),
         fallback_dir=maintenance_dir,
@@ -3995,6 +3998,18 @@ def _load_cauren_core_agent_runtime(base_dir: Path) -> None:
 def load_model():
     base_dir = Path(__file__).resolve().parent.parent
     _load_cauren_core_agent_runtime(base_dir)
+    # No-op unless STATE_STORE_ENABLED=true. Kept wired so that enabling the
+    # store actually round-trips: persisting state that is never read back on
+    # boot would leave the service no more restart-durable than with it off.
+    _restore_runtime_state(app)
+    if app.state.report_worker_mode == "internal":
+        app.state.report_worker = threading.Thread(
+            target=_report_worker,
+            args=(app,),
+            name="cauren-report-worker",
+            daemon=True,
+        )
+        app.state.report_worker.start()
 
 
 @app.on_event("shutdown")

@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .contracts import (
     AgentCandidate,
     AgentSchema,
@@ -12,6 +14,18 @@ from .contracts import (
     SensorReading,
     SensorWindow,
 )
+from .quality_control import QualityControlReport, QualityFinding, evaluate_quality
+from .uncertainty import UncertaintyFactor, UncertaintyReport, estimate_uncertainty
+
+if TYPE_CHECKING:
+    # Imported eagerly for type checkers only. At runtime these stay behind
+    # the module __getattr__ below so importing cauren_core does not pull in
+    # torch (backbone/training) or the whole agent registry (orchestrator).
+    from .backbone import CaurenHybridBackbone, HybridBackboneUnavailable
+    from .explanations import render_diagnosis_explanation, render_physics_evidence
+    from .orchestrator import CaurenPipeline
+    from .runtime import CaurenCoreRuntime
+    from .training import CaurenCoreTrainConfig, train_cauren_core
 
 __all__ = [
     "AgentCandidate",
@@ -22,6 +36,7 @@ __all__ = [
     "CaurenCoreTrainConfig",
     "CaurenPipeline",
     "CoreOutput",
+    "evaluate_quality",
     "FeatureMetadata",
     "HybridBackboneUnavailable",
     "NormalizationDecision",
@@ -29,11 +44,16 @@ __all__ = [
     "NormalizationTrace",
     "NormalizedSensorReading",
     "PhysicsEvidence",
+    "QualityControlReport",
+    "QualityFinding",
     "render_diagnosis_explanation",
     "render_physics_evidence",
     "SensorReading",
     "SensorWindow",
     "train_cauren_core",
+    "UncertaintyFactor",
+    "UncertaintyReport",
+    "estimate_uncertainty",
 ]
 
 

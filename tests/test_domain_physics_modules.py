@@ -28,3 +28,26 @@ def test_civil_agent_emits_structural_and_readiness_relations():
     names = {item["name"] for item in evidence.relations}
     assert "structural_ground_coupling" in names
     assert "construction_readiness_gap" in names
+
+
+def test_civil_agent_folds_in_oma_frequency_drift_evidence():
+    agent = build_civil_agent()
+    readings, rejected = parse_sensor_readings(
+        [
+            {"sensor_id": "r1", "name": "structural_risk_score", "unit": "ratio", "value": 0.2, "timestamp": 1.0},
+            {"sensor_id": "r2", "name": "ground_stability_score", "unit": "ratio", "value": 0.2, "timestamp": 1.0},
+        ]
+    )
+    adapter = AgentSchemaAdapter(agent.schema)
+    window = adapter.build_window(readings, inherited_rejections=rejected)
+
+    evidence = agent.physics.evaluate(
+        window=window,
+        schema=agent.schema,
+        context={"oma_frequency_drift": {"max_drop_pct": 12.0, "overall_severity": "alarm"}},
+    )
+
+    relation = next(item for item in evidence.relations if item["name"] == "modal_frequency_drift")
+    assert relation["max_drop_pct"] == 12.0
+    assert relation["severity"] == "alarm"
+    assert evidence.agent_outputs["subsystem_scores"]["structural_reliability"] > 0.0
