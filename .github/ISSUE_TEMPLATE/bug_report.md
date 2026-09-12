@@ -18,7 +18,7 @@ exact payload if it is an API call.
 **Environment**
 - Python version:
 - OS:
-- Relevant env vars set (e.g. `CAUREN_CORE_BACKBONE`, `GOV_PILOT_SECURITY_ENABLED`):
+- Relevant env vars set (e.g. `CAUREN_CORE_BACKBONE`, `CAUREN_RUNTIME_MODE`):
 
 **Logs / traceback**
 Paste the exact error text if there is one.

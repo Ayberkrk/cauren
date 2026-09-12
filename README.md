@@ -168,7 +168,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (84 tests) |
+| `tests/` | Test suite (62 tests) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -176,29 +176,30 @@ reviewer, not damage verdicts.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health/liveness`, `/health/readiness` | Health checks (always public) |
+| `GET` | `/health/liveness`, `/health/readiness` | Health checks |
 | `GET` | `/agents` | List registered sector agents |
 | `POST` | `/calibrate` | Normalize/calibrate a sensor payload without running physics |
-| `POST` | `/diagnose` | Full pipeline: route, calibrate, classify, physics, compose |
-| `POST` | `/cbs/buildings/batch` | Batch-process CBS building records |
-| `GET` | `/cbs/jobs/{job_id}` | Look up a batch job's result |
-| `POST` | `/memory/ingest` | Feed operational memory / calibration history |
+| `POST` | `/diagnose` | Full pipeline: route, calibrate, classify, physics, compose. Accepts either a `sensors` list or a CBS-shaped building record (`building_id` + `risk_assessments`/`project_permit`/etc, converted internally) |
 
-All non-health routes require a bearer token (see Quick start).
+`api/app.py` is a thin, unauthenticated wrapper around
+`cauren_core.CaurenPipeline` -- there is no built-in login, token, or
+per-tenant access control. It's meant to be run locally or behind
+whatever the operator puts in front of it (a reverse proxy, an auth
+layer), not exposed to the open internet as-is.
 
 ## Quick start
 
 ```bash
-pip install fastapi pydantic pytest httpx numpy pandas psutil uvicorn pyyaml torch
-python3 -m pytest tests/            # 84 tests, no network/GPU required
+pip install fastapi pydantic pytest httpx
+python3 -m pytest tests/            # 62 tests, no network/GPU/numpy/torch required
+
+pip install uvicorn                 # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
 ```
 
-The security gate is on by default (`GOV_PILOT_SECURITY_ENABLED`). Set
-`GOV_PILOT_API_TOKEN` (or `GOV_PILOT_API_TOKENS`, comma-separated)
-before starting the API. There is no built-in default token, so with
-the gate on and nothing configured, every authenticated route is
-rejected until you set one.
+`numpy` is optional: `cauren_physics/oma.py` uses it for faster FFTs when
+present, and falls back to a pure-Python DFT otherwise. Nothing else in
+the pipeline touches it.
 
 ### Rebuilding the bridge dataset
 

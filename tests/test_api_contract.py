@@ -9,37 +9,24 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# api/app.py no longer ships a hardcoded default bearer token (see
-# GOV_PILOT_API_TOKEN handling) -- tests provide their own before import
-# so the security gate has something to check requests against.
-TEST_AUTH_TOKEN = "test-only-cauren-pilot-token"
-os.environ.setdefault("GOV_PILOT_API_TOKEN", TEST_AUTH_TOKEN)
-
 from api.app import app
 
 
 @pytest.fixture()
 def client():
     with TestClient(app) as c:
-        c.headers.update(
-            {
-                "Authorization": f"Bearer {TEST_AUTH_TOKEN}",
-                "X-Cauren-Role": "operator",
-            }
-        )
         yield c
 
 
 def _sensor_payload(asset_id: str = "asset-1") -> dict:
     return {
         "asset_id": asset_id,
-        "site_id": "pilot-site",
+        "site_id": "site-01",
         "line_id": "zone-a",
         "machine_id": "node-01",
         "agent_id": "cauren-civil",
         "sector": "civil",
         "timestamp": time.time(),
-        "mission_phase": "field_review",
         "seq_len": 16,
         "sampling_hz": 1.0,
         "sensors": [
@@ -67,7 +54,6 @@ def _cbs_record(building_id: str = "bina-001") -> dict:
             "ground_stability_score": 0.52,
         },
         "inspection_findings": [{"finding_score": 0.78, "note": "field review required"}],
-        "unexpected_tucbs_field": {"preserve": True},
     }
 
 
@@ -76,17 +62,21 @@ def test_health_endpoints_are_available(client):
     readiness = client.get("/health/readiness")
     assert liveness.status_code == 200
     assert readiness.status_code == 200
-    assert liveness.json()["status"] == "alive"
+    assert liveness.json()["status"] == "ok"
     body = readiness.json()
-    assert body["runtime_architecture"] == "cauren_core_civil_agent"
+    assert body["ready"] is True
     assert body["agent_count"] == 1
     assert body["agents"] == ["cauren-civil"]
 
 
-def test_security_rejects_unauthenticated_non_health_request():
-    with TestClient(app) as c:
-        resp = c.get("/metrics")
-    assert resp.status_code == 401
+def test_all_routes_are_reachable_with_no_authentication(client):
+    """This API ships with no auth layer: it's a research prototype meant to
+    run locally or behind whatever the operator puts in front of it, not a
+    multi-tenant service with its own access control. A plain request with
+    no headers must succeed.
+    """
+    resp = client.get("/agents")
+    assert resp.status_code == 200
 
 
 def test_agents_route_is_single_civil_agent(client):
@@ -110,7 +100,7 @@ def test_calibrate_accepts_civil_sensor_payload(client):
     body = resp.json()
     assert body["selected_agent"] == "cauren-civil"
     assert body["feature_names"]
-    assert body["meta"]["architecture"] == "cauren_core_civil_agent"
+    assert body["meta"]["asset_id"] == "asset-1"
 
 
 def test_diagnose_requires_sensors_or_building_payload(client):
@@ -128,7 +118,7 @@ def test_diagnose_accepts_civil_sensor_payload(client):
     body = resp.json()
     assert body["selected_agent"] == "cauren-civil"
     assert body["calibration"]["mode"] == "cauren_core_agent_schema"
-    assert body["meta"]["architecture"] == "cauren_core_civil_agent"
+    assert body["meta"]["asset_id"] == "asset-1"
 
 
 def test_diagnose_response_carries_quality_control_and_uncertainty(client):
@@ -180,26 +170,14 @@ def test_diagnose_building_payload_forces_civil_agent(client):
     assert body["meta"]["cbs_building_payload"] is True
 
 
-def test_cbs_building_batch_processes_and_deduplicates(client):
-    payload = {
-        "idempotency_key": f"batch-{time.time_ns()}",
-        "source": "tucbs",
-        "records": [_cbs_record("bina-001"), {"building_id": "bad-1"}],
-    }
-    first = client.post("/cbs/buildings/batch", json=payload)
-    assert first.status_code == 200
-    body = first.json()
-    assert body["submitted_records"] == 2
-    assert body["accepted_records"] == 1
-    assert body["rejected_records"] == 1
-    assert body["sample_results"][0]["selected_agent"] == "cauren-civil"
-    assert body["contract"]["agent"] == "cauren-civil"
-
-    status = client.get(f"/cbs/jobs/{body['job_id']}")
-    assert status.status_code == 200
-    assert status.json()["job_id"] == body["job_id"]
-
-    replay = client.post("/cbs/buildings/batch", json=payload)
-    assert replay.status_code == 200
-    assert replay.json()["job_id"] == body["job_id"]
-    assert replay.json()["idempotent_replay"] is True
+def test_diagnose_defaults_asset_id_and_timestamp_when_omitted(client):
+    """No institutional asset-identity resolver behind this anymore: a
+    missing asset_id/timestamp should just fall back to sane defaults
+    instead of requiring a resolution service.
+    """
+    payload = _sensor_payload()
+    payload.pop("asset_id")
+    payload.pop("timestamp")
+    resp = client.post("/diagnose", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["meta"]["asset_id"] == "cauren_asset"

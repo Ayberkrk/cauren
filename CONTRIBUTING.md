@@ -9,12 +9,12 @@ worth more here than polish.
 Running the test suite needs only these:
 
 ```bash
-pip install fastapi pydantic pytest httpx numpy
+pip install fastapi pydantic pytest httpx
 python3 -m pytest tests/
 ```
 
-All 84 tests should pass with no network access and no GPU, and without
-`torch` installed. Add `psutil` and `uvicorn` to run the API itself. If
+All 62 tests should pass with no network access, no GPU, and without
+`numpy` or `torch` installed. Add `uvicorn` to run the API itself. If
 you are working on the `cauren-bridge` backbone you also need `torch`,
 `pyyaml` for the `LLM/` sub-project, and, to rebuild the bridge dataset
 from scratch, `pandas`, `pyarrow`, and `scipy`.
@@ -87,6 +87,8 @@ Open a GitHub issue with:
   is one.
 - The smallest input or command that reproduces it.
 
-Security-sensitive findings (for example, anything touching the
-`GOV_PILOT_*` auth gate) should not go into a public issue. Reach out to
-a maintainer directly instead.
+Security-sensitive findings should not go into a public issue.
+Reach out to a maintainer directly instead. Note that `api/app.py`
+ships with no authentication by design (see README's API section) --
+that is a documented design choice for a research prototype, not
+something to report as a bug on its own.
