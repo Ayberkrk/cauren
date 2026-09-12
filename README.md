@@ -58,7 +58,7 @@ Optional: `building_height_m`, `footprint_area_m2`, `soil_settlement_mm`,
 | Feature | Unit | Source |
 |---|---|---|
 | `structural_risk_score` | ratio (0-1) | Derived from FHWA deck/superstructure/substructure condition ratings |
-| `ground_stability_score` | ratio (0-1) | Derived from FHWA scour-criticality rating |
+| `ground_stability_score` | ratio (0-1) | Scour risk/vulnerability derived from FHWA Item 113 (scour-criticality rating) via an explicit code -> risk mapping (categorical, not linear); 1.0 = poor stability / high vulnerability, same risk direction as `cauren-civil`'s `ground_stability_score` |
 | `natural_hazard_score` | ratio (0-1) | USGS seismic hazard (PGA) + FEMA flood zone |
 
 ## Evaluation
@@ -75,7 +75,7 @@ dataset built from public sources, not synthetic or heuristic data.
 | Bridges | 56,679, each with a real, independently-observed 5-year outcome |
 | Supervised target | `deck_drop_5yr`: did the deck condition rating actually drop within 5 years? |
 | Train / validation / test | 39,675 / 8,501 / 8,503 windows, split by bridge (no bridge appears in two splits) |
-| Validation accuracy | **77.3%** |
+| Validation accuracy | **77.3%** (pre-dates the checkpoint selection rule below; see note) |
 | Majority-class baseline | 74.1% |
 | Parameters | 176,196 |
 
@@ -89,6 +89,26 @@ similar leakage check should be treated with suspicion. See
 because of size, see [Rebuilding the bridge dataset](#rebuilding-the-bridge-dataset))
 and `cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt` for the
 trained artifact.
+
+**Checkpoint selection.** For a dataset without a real supervised target
+(`cauren-civil`), the best checkpoint is the epoch with the lowest
+validation reconstruction (MAE) loss. For `cauren-bridge`, which has one
+(`deck_drop_5yr`), the best checkpoint is instead the epoch with the
+lowest validation supervised loss (binary cross-entropy on
+`deck_drop_5yr`), not reconstruction loss -- the two can diverge (an
+epoch can reconstruct the input window better while forecasting the
+outcome worse), and the model is explicitly evaluated on the forecasting
+task. BCE is used over raw accuracy for selection because the target is
+imbalanced (~25% positive); reconstruction loss is still recorded every
+epoch for diagnostics (`cauren_core/training.py`'s
+`train_summary["validation_loss_history"]`), and the selected metric and
+its value/epoch are recorded in `train_summary["selection_metric"]` /
+`train_summary["best_selection_metric_value"]`. The 77.3% figure above
+was measured before this rule existed (the checkpoint was previously
+selected by reconstruction loss); it should be re-measured by retraining
+(`python3 tools/train_cauren_core.py --profile civil_cpu_small --agents
+cauren-bridge`) and evaluating the resulting checkpoint once on the
+untouched test split.
 
 ## Status and honest limitations
 

@@ -41,6 +41,40 @@ class CaurenCoreTrainConfig:
     scnn_config: dict[str, Any] = field(default_factory=dict)
 
 
+def _checkpoint_selection_metric_name(*, has_supervision: bool) -> str:
+    """Which validation metric drives checkpoint selection for this agent.
+
+    Decided once per training run (not per epoch) so every epoch is
+    compared on the same scale. Datasets without a real supervised target
+    (e.g. cauren-civil) select the checkpoint with the lowest validation
+    reconstruction loss, same as before. Datasets with one (e.g.
+    cauren-bridge's deck_drop_5yr) select on validation supervised BCE
+    instead: the model is explicitly evaluated on that forecasting task,
+    reconstruction quality and forecast quality can diverge across epochs,
+    and BCE is a smoother, less majority-class-sensitive signal than raw
+    accuracy on an imbalanced target.
+    """
+    return "validation_supervised_bce" if has_supervision else "validation_reconstruction_loss"
+
+
+def _checkpoint_selection_metric_value(
+    *,
+    metric_name: str,
+    val_avg_loss: float | None,
+    val_supervised_bce: float | None,
+) -> float | None:
+    """This epoch's value for `metric_name`, or None if not available.
+
+    None (e.g. a supervised run whose validation batch happened to have no
+    labeled windows this epoch, or no validation split at all) means this
+    epoch is skipped for selection purposes -- it neither becomes the new
+    best nor counts against early-stopping patience.
+    """
+    if metric_name == "validation_supervised_bce":
+        return val_supervised_bce
+    return val_avg_loss
+
+
 def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
     torch = None if config.dry_run else _import_torch()
     if torch is not None:
@@ -166,7 +200,8 @@ def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
         model.train()
         count = int(normalized.shape[0])
         batch_size = max(1, int(config.batch_size))
-        best_val_loss = float("inf")
+        best_selection_metric_name: str | None = None
+        best_selection_metric_value = float("inf")
         best_epoch = 0
         best_state_dict = None
         epochs_without_improve = 0
@@ -210,12 +245,15 @@ def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
                 epoch_losses.append(float(loss.detach().cpu().item()))
             epoch_avg_loss = float(sum(epoch_losses) / float(max(1, len(epoch_losses))))
             val_avg_loss = None
+            val_supervised_bce = None
             if validation_normalized is not None and validation_mask is not None and int(validation_normalized.shape[0]) > 0:
                 model.eval()
                 with torch.no_grad():
                     validation_losses: list[float] = []
                     correct = 0
                     labeled_total = 0
+                    bce_sum = 0.0
+                    bce_labeled_total = 0
                     val_count = int(validation_normalized.shape[0])
                     for start in range(0, val_count, batch_size):
                         x = validation_normalized[start : start + batch_size]
@@ -240,11 +278,24 @@ def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
                             hits = ((predicted == batch_label_values).float() * batch_label_mask).sum().item()
                             correct += int(hits)
                             labeled_total += int(batch_label_mask.sum().item())
+                            if bool(batch_label_mask.any().item()):
+                                bce = torch.nn.functional.binary_cross_entropy_with_logits(
+                                    output["risk_logit"], batch_label_values, reduction="none"
+                                )
+                                bce_sum += float((bce * batch_label_mask).sum().item())
+                                bce_labeled_total += int(batch_label_mask.sum().item())
                 model.train()
                 val_avg_loss = float(sum(validation_losses) / float(max(1, len(validation_losses))))
+                if has_supervision and bce_labeled_total > 0:
+                    val_supervised_bce = bce_sum / bce_labeled_total
                 if has_supervision and labeled_total > 0:
                     summary.setdefault("validation_supervised_accuracy_history", []).append(
-                        {"epoch": epoch + 1, "accuracy": round(correct / labeled_total, 6), "labeled_windows": labeled_total}
+                        {
+                            "epoch": epoch + 1,
+                            "accuracy": round(correct / labeled_total, 6),
+                            "bce": round(val_supervised_bce, 6) if val_supervised_bce is not None else None,
+                            "labeled_windows": labeled_total,
+                        }
                     )
             summary["loss_history"].append(
                 {
@@ -254,18 +305,42 @@ def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
             )
             if val_avg_loss is not None:
                 summary["validation_loss_history"].append({"epoch": epoch + 1, "loss": val_avg_loss})
-                if val_avg_loss < best_val_loss - 1e-6:
-                    best_val_loss = val_avg_loss
-                    best_epoch = epoch + 1
-                    best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-                    epochs_without_improve = 0
-                else:
-                    epochs_without_improve += 1
+                # Checkpoint selection is objective-aware: a dataset with a
+                # real supervised target (e.g. cauren-bridge's
+                # deck_drop_5yr) is explicitly evaluated on that
+                # forecasting task, so the epoch is chosen by validation
+                # supervised BCE rather than reconstruction loss -- the two
+                # can and do diverge (an epoch can reconstruct the input
+                # better while predicting the outcome worse). BCE is used
+                # instead of accuracy because the bridge target is
+                # imbalanced (~25% positive) and accuracy alone can be won
+                # by leaning toward the majority class; reconstruction loss
+                # is still recorded every epoch above for diagnostics.
+                # Datasets without a supervised target (e.g. cauren-civil)
+                # keep the original reconstruction-loss selection.
+                metric_name = _checkpoint_selection_metric_name(has_supervision=has_supervision)
+                metric_value = _checkpoint_selection_metric_value(
+                    metric_name=metric_name,
+                    val_avg_loss=val_avg_loss,
+                    val_supervised_bce=val_supervised_bce,
+                )
+                best_selection_metric_name = metric_name
+                metric_suffix = ""
+                if metric_value is not None:
+                    if metric_value < best_selection_metric_value - 1e-6:
+                        best_selection_metric_value = metric_value
+                        best_epoch = epoch + 1
+                        best_state_dict = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                        epochs_without_improve = 0
+                    else:
+                        epochs_without_improve += 1
+                    if metric_name == "validation_supervised_bce":
+                        metric_suffix = f" | Val Supervised BCE ({target_column}): {metric_value:.6f}"
                 acc_history = summary.get("validation_supervised_accuracy_history") or []
                 acc_suffix = f" | Val Accuracy ({target_column}): {acc_history[-1]['accuracy']:.4f}" if acc_history and acc_history[-1]["epoch"] == epoch + 1 else ""
                 print(
                     f"Agent: {agent_id} | Epoch: {epoch + 1}/{max(1, int(config.epochs))} | "
-                    f"Train Loss: {epoch_avg_loss:.6f} | Val Loss: {val_avg_loss:.6f}{acc_suffix}",
+                    f"Train Loss: {epoch_avg_loss:.6f} | Val Loss: {val_avg_loss:.6f}{acc_suffix}{metric_suffix}",
                     flush=True,
                 )
                 if (epoch + 1) >= max(1, int(config.min_epochs)) and epochs_without_improve >= max(1, int(config.early_stopping_patience)):
@@ -277,7 +352,17 @@ def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
         if best_state_dict is not None:
             model.load_state_dict(best_state_dict, strict=False)
         summary["best_epoch"] = int(best_epoch or len(summary["loss_history"]))
-        summary["best_validation_loss"] = float(best_val_loss) if best_val_loss != float("inf") else None
+        summary["selection_metric"] = best_selection_metric_name
+        summary["best_selection_metric_value"] = (
+            float(best_selection_metric_value) if best_selection_metric_value != float("inf") else None
+        )
+        # Reconstruction loss at the selected epoch, kept for diagnostics
+        # regardless of which metric drove selection (see
+        # summary["selection_metric"] for which one that was).
+        summary["best_validation_loss"] = next(
+            (row["loss"] for row in summary["validation_loss_history"] if row["epoch"] == summary["best_epoch"]),
+            None,
+        )
         acc_at_best = next(
             (row["accuracy"] for row in summary.get("validation_supervised_accuracy_history", []) if row["epoch"] == summary["best_epoch"]),
             None,

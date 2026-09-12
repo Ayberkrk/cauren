@@ -30,8 +30,14 @@ Design notes (why the logic looks the way it does):
 - structural_risk_score is 1 minus the worst (lowest) of deck,
   superstructure, and substructure condition, divided by 9 (the NBI
   0-9 scale, 9 = excellent). ground_stability_score comes from the
-  scour-criticality rating (Item 113); "N"/"U" (not over water /
-  not evaluated) are left missing rather than guessed.
+  scour-criticality rating (Item 113) via ITEM_113_RISK_BY_CODE, an
+  explicit code -> risk mapping rather than a linear code/9.0 scale --
+  Item 113 is categorical, not a linear condition rating, so a stable
+  code (8) and a scour-critical code (3) are not "8/9 of the way" and
+  "3/9 of the way" to the same failure mode. "N"/"U" (not over water /
+  unevaluated) are left missing rather than guessed; "T" (tidal, not
+  evaluated but documented by FHWA as low risk) gets an explicit small
+  risk value instead of being lumped in with the true unknowns.
 - A window's input rows are truncated to years at or before its own
   label's reference year (the anchor year). An earlier version of this
   script used each bridge's overall latest inspection as the window
@@ -67,6 +73,54 @@ RAW_COLS = [
     "DECK_COND_058", "SUPERSTRUCTURE_COND_059", "SUBSTRUCTURE_COND_060",
     "SCOUR_CRITICAL_113",
 ]
+
+# FHWA Item 113 ("Scour Critical Bridges") code -> scour risk/vulnerability
+# score, where 1.0 means poor stability / high vulnerability. This matches
+# how ground_stability_score is interpreted everywhere else in this project
+# (see cauren_physics/bridge.py, cauren_physics/civil.py: it is combined
+# positively with structural risk, so higher must mean higher risk).
+#
+# Item 113 is a categorical rating, not a linear 0-9 scale: codes 0-3
+# describe worsening scour-critical conditions (0 = failed/closed, 3 =
+# foundations unstable for the calculated/observed scour condition), while
+# 4/5/7/8/9 describe stable or already-remediated conditions. A naive
+# `code / 9.0` conversion scores a stable bridge (8 -> 0.89) as *more* at
+# risk than a scour-critical one (3 -> 0.33), which is backwards.
+#
+# Source: FHWA Recording and Coding Guide for the NBI, Item 113 definitions.
+ITEM_113_RISK_BY_CODE: dict[int, float] = {
+    0: 1.00,  # failed and closed to traffic
+    1: 0.90,  # scour critical, immediate action required to provide countermeasures
+    2: 0.75,  # scour critical, field review indicates action required to protect foundations
+    3: 0.60,  # scour critical, foundations unstable for calculated/observed scour
+    4: 0.10,  # stable for calculated scour condition (tidal)
+    5: 0.05,  # stable for calculated scour condition, within limits of footing/piles
+    7: 0.05,  # previously scour-critical, corrected with countermeasures
+    8: 0.05,  # stable for calculated scour condition, above bottom of footing
+    9: 0.00,  # foundations not exposed to scour (above flood elevation / dry channel)
+}
+# Code 6 ("scour evaluation not yet complete", rarely used outside the
+# original coding pass) and "U" (unknown foundation, not evaluated) carry no
+# defensible risk direction and are left missing rather than guessed (they
+# fall out of ITEM_113_RISK_BY_CODE naturally, since neither is a key in
+# it). "N" (bridge not over a waterway) is not applicable and also left
+# missing for the same reason.
+# "T" (bridge over tidal waters, not evaluated) is explicitly documented by
+# FHWA as low risk despite being unevaluated, so unlike the true unknowns
+# above it gets a small, explicit non-missing risk value.
+ITEM_113_TIDAL_UNEVALUATED_RISK = 0.10
+
+
+def scour_risk_from_item_113(raw: "pd.Series") -> "pd.Series":
+    """Map raw Item 113 codes to an explicit, documented risk score.
+
+    See ITEM_113_RISK_BY_CODE's module-level comment for why this can't be
+    a linear function of the code.
+    """
+    codes = raw.astype(str).str.strip().str.upper()
+    numeric = pd.to_numeric(codes, errors="coerce")
+    risk = numeric.map(ITEM_113_RISK_BY_CODE)
+    return risk.where(~codes.eq("T"), ITEM_113_TIDAL_UNEVALUATED_RISK)
 
 
 def _year_from_filename(path: str) -> int | None:
@@ -117,7 +171,7 @@ def load_nbi(raw_dir: Path, states: set[str]) -> pd.DataFrame:
     nbi["deck_cond"] = to_num(nbi["DECK_COND_058"])
     nbi["superstructure_cond"] = to_num(nbi["SUPERSTRUCTURE_COND_059"])
     nbi["substructure_cond"] = to_num(nbi["SUBSTRUCTURE_COND_060"])
-    nbi["scour_code"] = to_num(nbi["SCOUR_CRITICAL_113"])
+    nbi["scour_code"] = to_num(nbi["SCOUR_CRITICAL_113"])  # kept for debugging/inspection
     nbi["year_built"] = to_num(nbi["YEAR_BUILT_027"])
     nbi["lat_dd"] = _dms_to_decimal(to_num(nbi["LAT_016"]), is_lon=False)
     nbi["lon_dd"] = _dms_to_decimal(to_num(nbi["LONG_017"]), is_lon=True)
@@ -127,7 +181,7 @@ def load_nbi(raw_dir: Path, states: set[str]) -> pd.DataFrame:
     cond_min = nbi[["deck_cond", "superstructure_cond", "substructure_cond"]].min(axis=1, skipna=True)
     has_structural = nbi[["deck_cond", "superstructure_cond", "substructure_cond"]].notna().any(axis=1)
     nbi["structural_risk_score"] = np.where(has_structural, 1.0 - (cond_min.clip(0, 9) / 9.0), np.nan)
-    nbi["ground_stability_score"] = np.where(nbi["scour_code"].between(0, 9), nbi["scour_code"] / 9.0, np.nan)
+    nbi["ground_stability_score"] = scour_risk_from_item_113(nbi["SCOUR_CRITICAL_113"]).to_numpy()
     return nbi
 
 
@@ -309,13 +363,25 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
             fp.write("\n".join(ids) + "\n")
 
     summary = {
-        "dataset_id": "cauren_bridge_fhwa_nbi_v2_leakage_fixed",
+        "dataset_id": "cauren_bridge_fhwa_nbi_v3_scour_risk_direction_fixed",
         "agent_id": "cauren-bridge",
         "sector": "civil",
         "asset_count": window_idx,
         "features": FEATURES,
         "required_features": FEATURES,
         "optional_features": [],
+        "feature_definitions": {
+            "ground_stability_score": (
+                "Scour risk/vulnerability derived from FHWA NBI Item 113 via an explicit "
+                "code -> risk mapping (see ITEM_113_RISK_BY_CODE in "
+                "tools/build_cauren_bridge_dataset.py), not a linear code/9.0 scale. 1.0 means "
+                "poor stability / high vulnerability (e.g. code 0, failed and closed); 0.0 means "
+                "foundations not exposed to scour (code 9). Codes 'N' (not over a waterway) and "
+                "'U' (unknown foundation, unevaluated) are left missing; code 'T' (tidal, "
+                "unevaluated but documented by FHWA as low risk) is scored "
+                f"{ITEM_113_TIDAL_UNEVALUATED_RISK}."
+            ),
+        },
         "license_posture": "public_research_reproducible_cc_by_4.0",
         "source": "FHWA National Bridge Inventory 2000-2023 (via sweetapricity/bridgedeck-nbi, sweetapricity/bridgedeck-nshm, sweetapricity/bridgedeck-nfhl on Hugging Face)",
         "states_included": sorted(nbi["state_code"].unique().tolist()),
