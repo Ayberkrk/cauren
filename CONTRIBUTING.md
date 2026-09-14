@@ -9,9 +9,12 @@ worth more here than polish.
 Running the test suite needs only these:
 
 ```bash
-pip install fastapi pydantic pytest httpx
+pip install -e '.[test]'
 python3 -m pytest tests/
 ```
+
+(equivalent to `pip install fastapi pydantic pytest httpx` if you'd
+rather not use the `pyproject.toml` extra)
 
 All 62 tests should pass with no network access, no GPU, and without
 `numpy` or `torch` installed. Add `uvicorn` to run the API itself. If

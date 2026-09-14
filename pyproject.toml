@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cauren"
+version = "0.1.0"
+description = "Civil-engineering diagnostics and decision-support system: sensor/CBS normalization, a generic anomaly-detection core, and a physics-grounded explainable risk diagnosis."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Ayberk Korkmaz" }]
+
+# The diagnostics pipeline itself (cauren_core, cauren_agents, cauren_physics,
+# tools) has no required third-party dependencies -- numpy and torch are
+# soft-imported (see cauren_physics/oma.py, cauren_core/backbone.py) and
+# fall back to pure-Python paths when absent. Only running the HTTP API,
+# the test suite, or specific tools/ scripts needs anything installed;
+# pick the matching extra below rather than installing everything.
+dependencies = []
+
+[project.optional-dependencies]
+# Run the API: `pip install -e .[api]`, then `uvicorn api.app:app --reload`.
+api = [
+  "fastapi>=0.100",
+  "pydantic>=2",
+  "uvicorn>=0.23",
+]
+# Run the test suite: `pip install -e .[test]`, then `python3 -m pytest tests/`.
+test = [
+  "pytest>=7",
+  "httpx>=0.24",
+  "fastapi>=0.100",
+  "pydantic>=2",
+]
+# Train the core backbone (tools/train_cauren_core.py, cauren_core/backbone.py).
+backbone = [
+  "torch>=2.0",
+]
+# Build/audit the civil-engineering datasets under data/ and tools/
+# (tools/build_cauren_bridge_dataset.py needs pandas/scipy for the FHWA/USGS/
+# FEMA join; numpy also speeds up cauren_physics/oma.py's OMA peak-picking).
+dataset = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ayberkrk/cauren"
+Issues = "https://github.com/Ayberkrk/cauren/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cauren_core", "cauren_agents", "cauren_physics", "api", "tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

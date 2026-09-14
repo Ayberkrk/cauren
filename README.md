@@ -1,5 +1,7 @@
 # Cauren
 
+[![Tests](https://github.com/Ayberkrk/cauren/actions/workflows/tests.yml/badge.svg)](https://github.com/Ayberkrk/cauren/actions/workflows/tests.yml)
+
 Cauren is a civil-engineering diagnostics and decision-support system.
 It ingests sensor/CBS ("bina/insaat" GIS) readings or bridge inspection
 records, normalizes them into a canonical feature schema, runs them
@@ -209,17 +211,32 @@ layer), not exposed to the open internet as-is.
 
 ## Quick start
 
+The project is pip-installable from the repo root (`pyproject.toml`
+declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
+`tools` as packages, with no required dependencies of its own):
+
 ```bash
-pip install fastapi pydantic pytest httpx
+pip install -e '.[test]'
 python3 -m pytest tests/            # 62 tests, no network/GPU/numpy/torch required
 
-pip install uvicorn                 # only needed to actually run the API
+pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
+```
+
+Installing individual packages directly still works if you'd rather not
+use the extras above:
+
+```bash
+pip install fastapi pydantic pytest httpx
+pip install uvicorn                 # only needed to actually run the API
 ```
 
 `numpy` is optional: `cauren_physics/oma.py` uses it for faster FFTs when
 present, and falls back to a pure-Python DFT otherwise. Nothing else in
-the pipeline touches it.
+the pipeline touches it. Building/training against the bridge dataset
+needs the `dataset` extra (`pip install -e '.[dataset]'`, i.e.
+`numpy`/`pandas`/`scipy`), and training the core backbone needs the
+`backbone` extra (`torch`) -- see the next section.
 
 ### Rebuilding the bridge dataset
 
