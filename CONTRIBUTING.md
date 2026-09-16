@@ -20,7 +20,8 @@ All 62 tests should pass with no network access, no GPU, and without
 `numpy` or `torch` installed. Add `uvicorn` to run the API itself. If
 you are working on the `cauren-bridge` backbone you also need `torch`,
 `pyyaml` for the `LLM/` sub-project, and, to rebuild the bridge dataset
-from scratch, `pandas`, `pyarrow`, and `scipy`.
+from scratch, `pandas` and `scipy` (`pip install -e '.[backbone,dataset]'`
+covers both of the latter two cases).
 
 Read `README.md` and `operations/CAUREN_CORE_AGENT_ARCHITECTURE.md`
 first. Together they document the architecture and the data flow.

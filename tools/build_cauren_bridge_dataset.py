@@ -18,8 +18,8 @@ Example:
         --states CA IA PA \\
         --output-dir data/cauren_bridge
 
-Requires pandas, pyarrow, and scipy in addition to the project's normal
-runtime dependencies.
+Requires pandas and scipy in addition to the project's normal runtime
+dependencies (matches the `dataset` extra in the root pyproject.toml).
 
 Design notes (why the logic looks the way it does):
 

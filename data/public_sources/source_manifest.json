@@ -20,10 +20,10 @@
     {
       "source_id": "census_bps",
       "title": "U.S. Census Building Permits Survey",
-      "landing_page": "https://www.census.gov/construction/bps/",
-      "download_url": "https://www.census.gov/construction/bps/permitsbystate_cust.xls",
-      "target_name": "permitsbystate_cust.xls",
-      "license_note": "U.S. federal public data; cite the release table or API endpoint used.",
+      "landing_page": "https://www.census.gov/construction/bps/stateannual.html",
+      "download_url": "https://www.census.gov/construction/bps/xls/stateannual_202499.xls",
+      "target_name": "stateannual_202499.xls",
+      "license_note": "U.S. federal public data; cite the release table or API endpoint used. Census re-publishes this file under a new year-coded name each year (stateannual_<YYYY>99.xls) rather than keeping a stable URL, unlike their by-region file (permitsbyusreg_cust.xls); check https://www.census.gov/construction/bps/stateannual.html for the current filename when this one eventually goes stale again.",
       "bundled_example": "normalized/civil_public_core_assets.csv"
     },
     {

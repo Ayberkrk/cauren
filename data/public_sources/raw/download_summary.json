@@ -1,6 +1,11 @@
 {
   "downloads": [
     {
+      "reason": "no_download_url",
+      "source_id": "fhwa_nbi",
+      "status": "skipped"
+    },
+    {
       "license_note": "U.S. federal public data; cite FHWA and record the release year before redistribution.",
       "sha256": "8ab541047e2c3afb157c6f4b1370d6cf72b9eff3ff23b38b4f4ec579c636ce59",
       "source_id": "fhwa_nti",
@@ -8,10 +13,31 @@
       "target_path": "data/public_sources/raw/2025NTI.xlsx"
     },
     {
-      "download_url": "https://www.census.gov/construction/bps/permitsbystate_cust.xls",
-      "reason": "http_404",
+      "license_note": "U.S. federal public data; cite the release table or API endpoint used. Census re-publishes this file under a new year-coded name each year (stateannual_<YYYY>99.xls) rather than keeping a stable URL, unlike their by-region file (permitsbyusreg_cust.xls); check https://www.census.gov/construction/bps/stateannual.html for the current filename when this one eventually goes stale again.",
+      "sha256": "8228478c0fd60e51e332311f5ffba3f072c2fc68a55722fb38ec426885947e88",
       "source_id": "census_bps",
-      "status": "failed"
+      "status": "downloaded",
+      "target_path": "data/public_sources/raw/stateannual_202499.xls"
+    },
+    {
+      "reason": "no_download_url",
+      "source_id": "usgs_nshm",
+      "status": "skipped"
+    },
+    {
+      "reason": "no_download_url",
+      "source_id": "usgs_landslide",
+      "status": "skipped"
+    },
+    {
+      "reason": "no_download_url",
+      "source_id": "nrcs_ssurgo",
+      "status": "skipped"
+    },
+    {
+      "reason": "no_download_url",
+      "source_id": "noaa_slr",
+      "status": "skipped"
     }
   ],
   "manifest": "data/public_sources/source_manifest.json"

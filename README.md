@@ -241,9 +241,9 @@ needs the `dataset` extra (`pip install -e '.[dataset]'`, i.e.
 ### Rebuilding the bridge dataset
 
 `data/cauren_bridge/` is not checked in (it is ~1.5GB and fully
-reproducible from public sources). To rebuild it you need `pandas`,
-`pyarrow`, and `scipy` in addition to the packages above, and to pull
-the source data yourself:
+reproducible from public sources). To rebuild it you need `pandas` and
+`scipy` in addition to the packages above (`pip install -e '.[dataset]'`),
+and to pull the source data yourself:
 
 - FHWA National Bridge Inventory: `sweetapricity/bridgedeck-nbi` on
   Hugging Face
