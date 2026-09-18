@@ -77,20 +77,26 @@ dataset built from public sources, not synthetic or heuristic data.
 | Bridges | 56,679, each with a real, independently-observed 5-year outcome |
 | Supervised target | `deck_drop_5yr`: did the deck condition rating actually drop within 5 years? |
 | Train / validation / test | 39,675 / 8,501 / 8,503 windows, split by bridge (no bridge appears in two splits) |
-| Validation accuracy | **77.3%** (pre-dates the checkpoint selection rule below; see note) |
-| Majority-class baseline | 74.1% |
+| Validation accuracy | **77.3%** (epoch 9, selected by validation supervised BCE -- see note) |
+| Validation majority-class baseline | 74.1% |
+| Test accuracy | **77.3%** (untouched test split, never used for training or checkpoint selection) |
+| Test majority-class baseline | 74.0% |
 | Parameters | 176,196 |
 
-77.3% against a 74.1% baseline is a modest, genuine improvement, not a
+77.3% against a ~74% baseline is a modest, genuine improvement, not a
 spectacular one, and that is the point: the input window for each
 prediction is strictly limited to years at or before the outcome's
 reference year, so the model cannot see the future it is predicting. A
 model claiming much higher accuracy on this kind of task without a
-similar leakage check should be treated with suspicion. See
-`data/cauren_bridge/dataset_summary.json` (built locally, gitignored
-because of size, see [Rebuilding the bridge dataset](#rebuilding-the-bridge-dataset))
-and `cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt` for the
-trained artifact.
+similar leakage check should be treated with suspicion. Validation and
+test accuracy landing within a hundredth of a point of each other is a
+good sign that the checkpoint wasn't overfit to whichever split selected
+it. See `data/cauren_bridge/dataset_summary.json` (built locally,
+gitignored because of size, see
+[Rebuilding the bridge dataset](#rebuilding-the-bridge-dataset)) and
+`cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt` for the
+trained artifact; `tools/evaluate_cauren_bridge_checkpoint.py` reproduces
+the test-split numbers above from that checkpoint.
 
 **Checkpoint selection.** For a dataset without a real supervised target
 (`cauren-civil`), the best checkpoint is the epoch with the lowest
@@ -105,12 +111,25 @@ imbalanced (~25% positive); reconstruction loss is still recorded every
 epoch for diagnostics (`cauren_core/training.py`'s
 `train_summary["validation_loss_history"]`), and the selected metric and
 its value/epoch are recorded in `train_summary["selection_metric"]` /
-`train_summary["best_selection_metric_value"]`. The 77.3% figure above
-was measured before this rule existed (the checkpoint was previously
-selected by reconstruction loss); it should be re-measured by retraining
-(`python3 tools/train_cauren_core.py --profile civil_cpu_small --agents
-cauren-bridge`) and evaluating the resulting checkpoint once on the
-untouched test split.
+`train_summary["best_selection_metric_value"]`. The figures above were
+measured after both this rule and the Item 113 scour-direction fix (see
+`ground_stability_score` above) landed, by rebuilding the dataset from
+the original FHWA/USGS/FEMA sources and retraining from scratch:
+
+```bash
+python3 tools/train_cauren_core.py \
+    --dataset-dir data/cauren_bridge --agents cauren-bridge \
+    --output-path cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt \
+    --epochs 20 --batch-size 64 --learning-rate 0.0004 \
+    --early-stopping-patience 5 --min-epochs 5
+python3 tools/evaluate_cauren_bridge_checkpoint.py
+```
+
+(the retraining accuracy landed within 0.02 points of the pre-fix number
+measured under the old reconstruction-loss selection rule and the old,
+direction-inverted scour feature -- on this dataset the two fixes turned
+out not to move the headline accuracy much, which is itself a useful,
+honestly-reported data point, not a reason to have skipped verifying it).
 
 ## Status and honest limitations
 
@@ -190,7 +209,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (62 tests) |
+| `tests/` | Test suite (84 tests with the minimal dependency set; 99 total once pandas/torch/PyYAML are also installed) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -217,7 +236,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 62 tests, no network/GPU/numpy/torch required
+python3 -m pytest tests/            # 84 tests, no network/GPU/numpy/torch required (99 total with pandas/torch/PyYAML also installed)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
