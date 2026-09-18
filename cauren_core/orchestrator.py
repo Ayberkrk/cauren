@@ -96,9 +96,9 @@ class CaurenPipeline:
                     context_prior_score=float(item.get("context_prior_score") or 0.0),
                     penalty_score=float(item.get("penalty_score") or 0.0),
                     final_sector_score=float(
-                        item.get("final_sector_score")
-                        or item.get("score")
-                        or 0.0
+                        item["final_sector_score"]
+                        if item.get("final_sector_score") is not None
+                        else item.get("score") or 0.0
                     ),
                     evidence_reasons=tuple(str(value) for value in item.get("evidence_reasons", ()) if str(value)),
                     prior_reasons=tuple(str(value) for value in item.get("prior_reasons", ()) if str(value)),
