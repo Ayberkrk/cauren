@@ -17,6 +17,7 @@ localhost.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -169,6 +170,31 @@ def _score_from_mapping(data: Optional[Dict[str, Any]], keys: tuple[str, ...], d
     return default
 
 
+def _progress_pct_from_mapping(
+    data: Optional[Dict[str, Any]],
+    keys: tuple[str, ...],
+    default: float,
+) -> float:
+    if not isinstance(data, dict):
+        return default
+    for key in keys:
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, bool):
+            return 100.0 if value else 0.0
+        try:
+            progress = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(progress):
+            continue
+        if 0.0 <= progress <= 1.0:
+            progress *= 100.0
+        return max(0.0, min(100.0, progress))
+    return default
+
+
 def _inspection_score(items: Optional[List[Dict[str, Any]]]) -> float:
     if not items:
         return 0.2
@@ -191,7 +217,7 @@ def _building_sensors_from_payload(payload: DiagnoseIn) -> list[dict[str, Any]]:
     infra = payload.infrastructure_connections
     findings = payload.inspection_findings
     timestamp = time.time()
-    progress = _score_from_mapping(status, ("progress_pct", "completion_pct", "construction_progress_pct"), 0.0) * 100.0
+    progress = _progress_pct_from_mapping(status, ("progress_pct", "completion_pct", "construction_progress_pct"), 0.0)
     values = {
         "structural_risk_score": _score_from_mapping(
             risk, ("structural_risk_score", "structural_risk", "building_risk_score", "risk_score"), 0.25
