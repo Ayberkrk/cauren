@@ -120,12 +120,9 @@ def test_building_sensors_from_full_cbs_record_match_expected_values():
     assert values["structural_risk_score"] == 0.82
     assert values["inspection_finding_score"] == 0.78
     assert values["permit_status_score"] == 0.4
-    # construction_status.progress_pct is 82 (already looks like a percent,
-    # not a 0-1 fraction), but _score_from_mapping clamps to [0, 1] *before*
-    # the x100 scale-up, so 82 clamps to 1.0 first and comes out as 100.0,
-    # not 82.0. This is the clamp-then-scale interaction: a fractional input
-    # like 0.82 is what actually produces 82.0 (see the next test).
-    assert values["construction_progress_pct"] == 100.0
+    # Percentage inputs must remain percentages rather than being clamped
+    # to 1.0 before conversion.
+    assert values["construction_progress_pct"] == 82.0
     assert values["infrastructure_connection_score"] == 0.45
     assert values["natural_hazard_score"] == 0.65
     # occupancy_safety_score has no matching key in risk_assessments here.
@@ -133,10 +130,11 @@ def test_building_sensors_from_full_cbs_record_match_expected_values():
     assert values["ground_stability_score"] == 0.52
 
 
-def test_construction_progress_pct_scaling_with_fractional_input():
-    payload = DiagnoseIn(building_id="b1", construction_status={"progress_pct": 0.82})
-    values = _sensor_values(payload)
-    assert values["construction_progress_pct"] == 82.0
+def test_construction_progress_pct_accepts_fractional_and_percentage_inputs():
+    for raw_value, expected in ((0.82, 82.0), (82, 82.0), (-3, 0.0), (140, 100.0)):
+        payload = DiagnoseIn(building_id="b1", construction_status={"progress_pct": raw_value})
+        values = _sensor_values(payload)
+        assert values["construction_progress_pct"] == expected
 
 
 def test_building_sensors_use_documented_defaults_when_subdicts_are_missing():
