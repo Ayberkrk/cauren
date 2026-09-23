@@ -82,6 +82,9 @@ dataset built from public sources, not synthetic or heuristic data.
 | Validation majority-class baseline | 74.1% |
 | Test accuracy | **77.3%** (untouched test split, never used for training or checkpoint selection) |
 | Test majority-class baseline | 74.0% |
+| Test precision / recall / F1 | 74.6% / **19.2%** / 30.5% (prediction threshold 0.5) |
+| Test balanced accuracy | **58.4%** |
+| Test confusion matrix | TP 423, FP 144, TN 6151, FN 1785 |
 | Parameters | 176,196 |
 
 77.3% against a ~74% baseline is a modest, genuine improvement, not a
@@ -98,6 +101,22 @@ gitignored because of size, see
 `cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt` for the
 trained artifact; `tools/evaluate_cauren_bridge_checkpoint.py` reproduces
 the test-split numbers above from that checkpoint.
+
+**Accuracy alone overstates this model.** `deck_drop_5yr` is imbalanced
+(~25% positive: most bridges don't deteriorate within 5 years), so a
+model that always predicts "no drop" already scores ~74-75% accuracy
+without ever finding a real deterioration case. The 77.3% headline
+number is only 3 points above that trivial baseline, and the confusion
+matrix above shows why: at the 0.5 prediction threshold, the model finds
+423 of the 2,208 real positive cases in the test split and misses 1,785
+of them (19.2% recall), while balanced accuracy (58.4%, the average of
+recall and specificity) is much closer to the 50% chance line than the
+77.3% raw-accuracy figure suggests. Precision (74.6%) is respectable when
+the model does flag a bridge, but it flags relatively few. This is a
+real limitation of the current checkpoint, not a reporting error, and
+it's why `tools/evaluate_cauren_bridge_checkpoint.py` reports precision,
+recall, F1, balanced accuracy, and the raw confusion matrix alongside
+accuracy rather than accuracy alone.
 
 **Checkpoint selection.** For a dataset without a real supervised target
 (`cauren-civil`), the best checkpoint is the epoch with the lowest
@@ -148,9 +167,11 @@ This project is a working research prototype, not a finished product.
   the physics layer's read of the values you sent. Send a real time
   series (`seq_len` distinct timestamps) for genuine pattern-shape
   detection (drift, spike, oscillation, flatline, and so on).
-- **`LLM/` (`rocket_llm`) is pre-alpha.** Its `pyproject.toml` declares
-  several CLI entry points that are not implemented yet; only
-  `LLM/src/rocket_llm/pipelines/training.py` exists.
+- **`LLM/` (`rocket_llm`) is pre-alpha.** No CLI is exposed yet --
+  `pyproject.toml` deliberately has no `[project.scripts]` section,
+  commented out until each backing module exists (see the file for the
+  planned list). Only `LLM/src/rocket_llm/pipelines/training.py` is
+  implemented so far.
 - **`cauren-civil` does not derive its 8 scores from raw sensor/CBS
   data, it consumes them.** The required features are expected to
   already exist (from a field inspection, an engineering assessment,
@@ -210,7 +231,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (86 tests with the minimal dependency set; 101 total once pandas/torch/PyYAML are also installed) |
+| `tests/` | Test suite (94 tests with the minimal dependency set; 109 total once pandas/torch/PyYAML are also installed) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -237,7 +258,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 86 tests, no network/GPU/numpy/torch required (101 total with pandas/torch/PyYAML also installed)
+python3 -m pytest tests/            # 94 tests, no network/GPU/numpy/torch required (109 total with pandas/torch/PyYAML also installed)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
