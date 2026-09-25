@@ -22,6 +22,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from statistics import median
+
+from .timoshenko_adapter import (
+    pair_modes as _pair_modes_with_timoshenko,
+    shear_building_frequencies as _shared_shear_building_frequencies,
+    update_scale_summary as _shared_update_summary,
+)
 
 
 @dataclass(frozen=True)
@@ -133,6 +140,12 @@ def natural_frequencies_hz(model: ShearBuildingModel) -> tuple[float, ...]:
     to a standard symmetric eigenproblem A = M^-1/2 * K * M^-1/2 without
     needing a full matrix inversion or decomposition routine.
     """
+    shared = _shared_shear_building_frequencies(model.story_masses_kg, model.story_stiffness_n_per_m)
+    if shared is not None:
+        return shared
+
+    # Dependency-free fallback for installations where the separate
+    # timoshenko-engine package is not installed.
     stiffness = model.stiffness_matrix()
     inv_sqrt_mass = [1.0 / math.sqrt(mass) for mass in model.story_masses_kg]
     n = model.num_stories
@@ -146,3 +159,51 @@ def natural_frequencies_hz(model: ShearBuildingModel) -> tuple[float, ...]:
     omegas = [math.sqrt(max(0.0, value)) for value in eigenvalues]
     frequencies = sorted(omega / (2.0 * math.pi) for omega in omegas)
     return tuple(frequencies)
+
+
+def model_consistency(model: ShearBuildingModel, current) -> dict:
+    """Compare measured OMA modes with FE frequencies for decision support.
+
+    The returned uniform stiffness ratio follows Timoshenko's update scale.
+    This is a model consistency measure, not a damage diagnosis or a drift
+    baseline.
+    """
+    model_frequencies = natural_frequencies_hz(model)
+    measured_frequencies = [mode.frequency_hz for mode in current.modal_parameters]
+    pairs = _pair_modes_with_timoshenko(model_frequencies, measured_frequencies)
+    if pairs is None:
+        from .oma import _pair_modes
+
+        pairs = _pair_modes(model_frequencies, measured_frequencies)
+
+    paired_modes = [
+        {
+            "model_mode": model_index + 1,
+            "model_frequency_hz": float(model_frequencies[model_index]),
+            "measured_frequency_hz": float(measured_frequencies[measured_index]),
+        }
+        for model_index, measured_index in pairs
+    ]
+    shared_summary = _shared_update_summary(
+        model.story_masses_kg,
+        model.story_stiffness_n_per_m,
+        measured_frequencies,
+    ) if pairs else None
+    if shared_summary is not None:
+        ratio, spread = shared_summary
+    elif paired_modes:
+        ratios = [
+            (pair["measured_frequency_hz"] / pair["model_frequency_hz"]) ** 2
+            for pair in paired_modes
+        ]
+        ratio = median(ratios)
+        spread = median(abs(value - ratio) for value in ratios) / ratio * 100.0 if ratio > 0.0 else None
+    else:
+        ratio = None
+        spread = None
+    return {
+        "model_frequencies_hz": [float(value) for value in model_frequencies],
+        "paired_modes": paired_modes,
+        "implied_uniform_stiffness_ratio": ratio,
+        "mode_ratio_spread_pct": spread,
+    }

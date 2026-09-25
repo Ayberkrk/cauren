@@ -2,11 +2,14 @@ from pathlib import Path
 
 import pytest
 
+from cauren_physics.oma import identify_modal_parameters
 from cauren_agents.civil.agent import build_civil_agent
 from cauren_core import CaurenPipeline
 from cauren_core.explanations import render_diagnosis_explanation
 from tools.run_explainable_review import (
+    build_oma_frequency_drift,
     load_sensors_json,
+    load_vibration_columns,
     load_vibration_series,
     load_wide_csv_rows,
     run_review,
@@ -87,11 +90,92 @@ def test_sensors_from_wide_row_uses_schema_feature_order_and_units():
     assert "footprint_area_m2" not in by_name
 
 
-def test_load_vibration_series_reads_a_numeric_column_and_skips_blanks(tmp_path):
+def test_load_vibration_series_reads_a_clean_numeric_column(tmp_path):
     path = tmp_path / "vibration.csv"
-    path.write_text("value\n1.0\n\n2.5\n-3\n", encoding="utf-8")
+    path.write_text("value\n1.0\n2.5\n-3\n", encoding="utf-8")
 
     assert load_vibration_series(path, "value") == [1.0, 2.5, -3.0]
+
+
+def test_load_vibration_series_rejects_blank_single_column_sample(tmp_path):
+    path = tmp_path / "single.csv"
+    path.write_text("value\n1.0\n\n3.0\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        load_vibration_series(path, "value")
+
+    assert f"{path}:3:" in str(exc.value)
+
+
+def test_load_vibration_columns_rejects_blank_multicolumn_cell(tmp_path):
+    path = tmp_path / "multiple.csv"
+    path.write_text("left,right\n1.0,2.0\n3.0,\n5.0,6.0\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        load_vibration_columns(path, ["right", "left"])
+
+    assert f"{path}:3:" in str(exc.value)
+
+
+def test_load_vibration_series_rejects_non_finite_values_with_line_number(tmp_path):
+    path = tmp_path / "non_finite.csv"
+    path.write_text("value\n1.0\ninf\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        load_vibration_series(path, "value")
+
+    assert f"{path}:3:" in str(exc.value)
+
+
+def test_load_vibration_columns_keeps_requested_channel_order(tmp_path):
+    path = tmp_path / "columns.csv"
+    path.write_text("a,b,c\n1,2,3\n4,5,6\n", encoding="utf-8")
+
+    assert load_vibration_columns(path, ["c", "a"]) == [[3.0, 6.0], [1.0, 4.0]]
+
+
+def test_multichannel_review_requires_timoshenko_when_engine_is_unavailable(tmp_path, monkeypatch):
+    import tools.run_explainable_review as review
+
+    path = tmp_path / "channels.csv"
+    path.write_text("a,b\n1,2\n2,3\n", encoding="utf-8")
+    monkeypatch.setattr(review, "identify_multichannel", lambda *args, **kwargs: None)
+
+    with pytest.raises(SystemExit, match="multi-channel FDD requires timoshenko-engine 2.0 or newer"):
+        build_oma_frequency_drift(
+            path,
+            columns=["a", "b"],
+            sampling_hz=100.0,
+            baseline_frequencies_hz=None,
+        )
+
+
+def test_multichannel_baseline_comparison_keeps_drift_report_separate(tmp_path, monkeypatch):
+    import tools.run_explainable_review as review
+
+    path = tmp_path / "channels.csv"
+    path.write_text("a,b\n1,2\n2,3\n", encoding="utf-8")
+    result = identify_modal_parameters([0.0, 1.0, 0.0, -1.0] * 64, 100.0)
+    result = result.__class__(
+        result.modal_parameters,
+        result.sampling_hz,
+        result.num_samples,
+        "fdd",
+        result.frequency_resolution_hz,
+        mode_shapes=({"frequency_hz": 25.0, "shape": {}},),
+    )
+    monkeypatch.setattr(review, "identify_multichannel", lambda *args, **kwargs: result)
+
+    report = build_oma_frequency_drift(
+        path,
+        columns=["a", "b"],
+        sampling_hz=100.0,
+        baseline_frequencies_hz=[25.0],
+    )
+
+    assert report["oma_result"]["method"] == "fdd"
+    assert report["oma_result"]["mode_shapes"]
+    assert "findings" in report
 
 
 def test_load_vibration_series_reports_the_offending_line_for_bad_data(tmp_path):

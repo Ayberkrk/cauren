@@ -26,11 +26,11 @@ Two input shapes are supported:
                normalizer's alias matching and the quality-control layer do
                real work on names it has to resolve itself.
 
-Vibration data for the operational-modal-analysis / FE-reference consistency
-check (see cauren_physics.oma / cauren_physics.fe_reference_model) is
-optional and separate, since most asset exports won't include a raw
-accelerometer channel: pass --vibration-csv plus --sampling-hz (and, to get
-a drift verdict rather than a bare identification, --baseline-frequencies-hz).
+Vibration data for modal identification is optional and separate, since most
+asset exports won't include raw accelerometer channels. Pass --vibration-csv
+and --sampling-hz; use --vibration-column for single-channel peak picking or
+--vibration-columns for Timoshenko FDD. A measured baseline is needed for drift
+comparison. FE model consistency is reported separately by the OMA tool.
 """
 
 from __future__ import annotations
@@ -38,10 +38,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -52,6 +53,7 @@ from cauren_core import CaurenPipeline
 from cauren_core.contracts import AgentSchema
 from cauren_core.explanations import render_diagnosis_explanation
 from cauren_physics.oma import compare_to_baseline, identify_modal_parameters
+from cauren_physics.timoshenko_adapter import identify_multichannel
 
 
 def sensors_from_wide_row(row: dict[str, str], schema: AgentSchema, *, timestamp: float | None = None) -> list[dict[str, Any]]:
@@ -103,37 +105,77 @@ def load_sensors_json(path: Path) -> list[dict[str, Any]]:
     )
 
 
-def load_vibration_series(path: Path, column: str) -> list[float]:
-    values: list[float] = []
+def load_vibration_columns(path: Path, columns: Sequence[str]) -> list[list[float]]:
+    """Load selected vibration columns in the requested channel-major order."""
+    requested = list(columns)
+    if not requested:
+        raise SystemExit(f"{path}: at least one vibration column is required.")
+    if len(set(requested)) != len(requested):
+        raise SystemExit(f"{path}: vibration columns must be unique.")
+    values = [[] for _ in requested]
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if column not in (reader.fieldnames or []):
-            raise SystemExit(f"{path}: column '{column}' not found. Available columns: {reader.fieldnames}")
-        for line_no, row in enumerate(reader, start=2):  # start=2: row 1 is the header
-            raw = row.get(column)
-            if raw in (None, ""):
-                continue
-            try:
-                values.append(float(raw))
-            except (TypeError, ValueError):
-                raise SystemExit(
-                    f"{path}:{line_no}: column '{column}' has non-numeric value {raw!r}. "
-                    "A vibration series must be numeric throughout."
-                ) from None
-    if not values:
-        raise SystemExit(f"{path}: column '{column}' contained no numeric samples.")
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration:
+            header = []
+        missing = [column for column in requested if column not in header]
+        if missing:
+            raise SystemExit(f"{path}: column(s) {missing!r} not found. Available columns: {header}")
+        indices = [header.index(column) for column in requested]
+        for row in reader:
+            if not row:
+                raise SystemExit(f"{path}:{reader.line_num}: empty vibration sample row.")
+            for output_index, (column, source_index) in enumerate(zip(requested, indices)):
+                raw = row[source_index].strip() if source_index < len(row) else ""
+                if not raw:
+                    raise SystemExit(f"{path}:{reader.line_num}: column '{column}' has an empty sample.")
+                try:
+                    value = float(raw)
+                except ValueError:
+                    raise SystemExit(
+                        f"{path}:{reader.line_num}: column '{column}' has non-numeric value {raw!r}. "
+                        "A vibration series must be numeric throughout."
+                    ) from None
+                if not math.isfinite(value):
+                    raise SystemExit(
+                        f"{path}:{reader.line_num}: column '{column}' has non-finite value {raw!r}."
+                    )
+                values[output_index].append(value)
+    if not values[0]:
+        raise SystemExit(f"{path}: column(s) {requested!r} contained no numeric samples.")
     return values
+
+
+def load_vibration_series(path: Path, column: str) -> list[float]:
+    return load_vibration_columns(path, [column])[0]
 
 
 def build_oma_frequency_drift(
     vibration_csv: Path,
     *,
-    column: str,
+    column: str | None = None,
+    columns: Sequence[str] | None = None,
     sampling_hz: float,
     baseline_frequencies_hz: list[float] | None,
 ) -> dict[str, Any]:
-    series = load_vibration_series(vibration_csv, column)
-    identified = identify_modal_parameters(series, sampling_hz)
+    if columns:
+        channel_columns = list(columns)
+        if len(channel_columns) < 2:
+            raise SystemExit("multi-channel FDD requires at least two vibration columns.")
+        channel_data = load_vibration_columns(vibration_csv, channel_columns)
+        identified = identify_multichannel(
+            channel_data,
+            sampling_hz,
+            channel_ids=channel_columns,
+            max_modes=8,
+            min_prominence_ratio=0.05,
+        )
+        if identified is None:
+            raise SystemExit("multi-channel FDD requires timoshenko-engine 2.0 or newer")
+    else:
+        series = load_vibration_series(vibration_csv, column or "value")
+        identified = identify_modal_parameters(series, sampling_hz)
     if not baseline_frequencies_hz:
         # No baseline to diff against: report the raw identification only,
         # CivilPhysics' modal_frequency_drift relation stays inactive
@@ -181,7 +223,9 @@ def main() -> None:
     parser.add_argument("--site-id", default=None)
 
     parser.add_argument("--vibration-csv", default=None, help="Optional single-channel vibration time series for OMA.")
-    parser.add_argument("--vibration-column", default="value")
+    vibration_columns = parser.add_mutually_exclusive_group()
+    vibration_columns.add_argument("--vibration-column", default=None)
+    vibration_columns.add_argument("--vibration-columns", nargs="+", default=None)
     parser.add_argument("--sampling-hz", type=float, default=None, help="Required if --vibration-csv is given.")
     parser.add_argument(
         "--baseline-frequencies-hz",
@@ -196,12 +240,19 @@ def main() -> None:
 
     if args.vibration_csv and args.sampling_hz is None:
         parser.error("--vibration-csv requires --sampling-hz")
+    if (args.vibration_column is not None or args.vibration_columns is not None) and not args.vibration_csv:
+        parser.error("vibration column options require --vibration-csv")
+    if args.vibration_columns is not None and len(args.vibration_columns) < 2:
+        parser.error("--vibration-columns requires at least two columns")
+    if args.vibration_columns is not None and not args.vibration_csv:
+        parser.error("--vibration-columns requires --vibration-csv")
 
     oma_frequency_drift = None
     if args.vibration_csv:
         oma_frequency_drift = build_oma_frequency_drift(
             Path(args.vibration_csv),
             column=args.vibration_column,
+            columns=args.vibration_columns,
             sampling_hz=args.sampling_hz,
             baseline_frequencies_hz=args.baseline_frequencies_hz,
         )

@@ -198,13 +198,30 @@ run on the way to it, so a reviewer can see how much to trust it:
 | `physics_evidence` | Why is the score what it is? The domain relations that fired, and which required features were missing. |
 
 Structural-health inputs are optional and separate. `cauren_physics/oma.py`
-identifies a structure's natural frequencies and damping from an ambient
-vibration series (peak-picking operational modal analysis), and
-`cauren_physics/fe_reference_model.py` computes what a shear-building
-mass/stiffness model predicts those frequencies should be. Comparing the
-two is a theory-vs-data consistency check; a measured frequency dropping
-below the baseline is read as possible stiffness loss and folded into the
-civil physics layer's `structural_reliability` signal.
+identifies natural frequencies from one vibration channel and estimates
+damping from a Welch spectrum. Damping is reported only when the measured
+half-power bandwidth is resolved. With multiple aligned channels, optional
+Timoshenko 2.x support adds Frequency Domain Decomposition (FDD) mode shapes.
+`cauren_physics/fe_reference_model.py` compares measured modes with a
+shear-building model and reports a separate model-consistency ratio. FE
+frequencies do not replace a measured drift baseline. Measured baseline
+drift is a decision-support signal for human review, not a damage verdict.
+
+Cauren can use Timoshenko for shared structural calculations: single-channel
+modal identification, mode pairing, multi-channel FDD, shear-building
+frequencies, and the global stiffness update summary. Cauren-specific risk
+relations and model interpretation remain in Cauren. Timoshenko is optional;
+the Cauren package and single-channel fallback work without it. Install
+[Timoshenko Engine](https://github.com/Ayberkrk/timoshenko) into the same
+Python environment to enable the shared engine path:
+
+```bash
+python -m pip install "timoshenko-engine @ git+https://github.com/Ayberkrk/timoshenko"
+```
+
+The distribution name is `timoshenko-engine`, while the import name is
+`timoshenko`. A PyPI install command should be used only after a release is
+available there.
 
 ```bash
 # Full explainable review over real data (repo ships a small public dataset)
@@ -216,6 +233,16 @@ python3 tools/run_explainable_review.py \
   --sensors-json my_sensors.json \
   --vibration-csv my_vibration.csv --sampling-hz 100 \
   --baseline-frequencies-hz 2.01
+
+# Multi-channel FDD uses columns in channel-major order and requires Timoshenko 2.0+
+python3 tools/run_oma_identification.py \
+  --input-csv my_channels.csv --columns north east west --sampling-hz 100
+
+# FE consistency is reported separately from the measured drift baseline
+python3 tools/run_oma_identification.py \
+  --input-csv my_vibration.csv --column acceleration --sampling-hz 100 \
+  --baseline-frequencies-hz 2.01 \
+  --fe-story-masses-kg 50000 --fe-story-stiffness-n-per-m 8000000
 ```
 
 These are decision-support signals for routing an asset to a human
@@ -231,7 +258,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (94 tests with the minimal dependency set; 109 total once pandas/torch/PyYAML are also installed) |
+| `tests/` | Test suite (115 tests with the minimal dependency set; 130 total once pandas/torch/PyYAML are also installed) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -278,7 +305,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 94 tests, no network/GPU/numpy/torch required (109 total with pandas/torch/PyYAML also installed)
+python3 -m pytest tests/            # 115 tests, no network/GPU/numpy/torch required (130 total with pandas/torch/PyYAML also installed)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

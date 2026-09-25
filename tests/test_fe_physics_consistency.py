@@ -1,7 +1,9 @@
 import math
 
-from cauren_physics.fe_reference_model import ShearBuildingModel, natural_frequencies_hz
-from cauren_physics.oma import compare_to_baseline, identify_modal_parameters
+import pytest
+
+from cauren_physics.fe_reference_model import ShearBuildingModel, model_consistency, natural_frequencies_hz
+from cauren_physics.oma import OMAResult, ModalParameter, compare_to_baseline, identify_modal_parameters
 
 
 def _synthetic_signal(frequencies_hz, sampling_hz, duration_s):
@@ -166,3 +168,90 @@ def test_oma_identification_flags_inconsistency_when_stiffness_drops():
 
     assert consistency.overall_severity in {"warn", "alarm"}
     assert consistency.findings[0].drift_pct > 5.0
+
+
+def test_model_consistency_estimates_uniform_stiffness_ratio_from_three_story_signal():
+    model = ShearBuildingModel(
+        story_masses_kg=(10_000.0, 10_000.0, 10_000.0),
+        story_stiffness_n_per_m=(1_000_000.0, 1_000_000.0, 1_000_000.0),
+    )
+    frequencies = natural_frequencies_hz(model)
+    measured = _synthetic_signal([math.sqrt(0.81) * value for value in frequencies], 100.0, 120.0)
+    current = identify_modal_parameters(measured, 100.0, max_modes=3, min_prominence_ratio=0.05)
+
+    result = model_consistency(model, current)
+
+    assert result["implied_uniform_stiffness_ratio"] == pytest.approx(0.81, abs=0.01)
+
+
+def test_model_consistency_pairs_first_and_third_when_second_mode_is_missing():
+    model = ShearBuildingModel(
+        story_masses_kg=(10_000.0, 10_000.0, 10_000.0),
+        story_stiffness_n_per_m=(1_000_000.0, 1_000_000.0, 1_000_000.0),
+    )
+    frequencies = natural_frequencies_hz(model)
+    current = OMAResult(
+        modal_parameters=(
+            ModalParameter(frequencies[0], None, 1.0, 1.0),
+            ModalParameter(frequencies[2], None, 1.0, 1.0),
+        ),
+        sampling_hz=100.0,
+        num_samples=10000,
+        method="peak_picking",
+        frequency_resolution_hz=0.01,
+    )
+
+    result = model_consistency(model, current)
+
+    assert [pair["model_mode"] for pair in result["paired_modes"]] == [1, 3]
+    assert result["implied_uniform_stiffness_ratio"] == pytest.approx(1.0)
+
+
+def test_model_consistency_returns_none_summaries_when_no_modes_pair():
+    model = ShearBuildingModel(story_masses_kg=(1000.0,), story_stiffness_n_per_m=(100_000.0,))
+    current = OMAResult((), 100.0, 0, "peak_picking", 0.0)
+
+    result = model_consistency(model, current)
+
+    assert result["paired_modes"] == []
+    assert result["implied_uniform_stiffness_ratio"] is None
+    assert result["mode_ratio_spread_pct"] is None
+
+
+def test_model_consistency_stiffness_ratio_matches_timoshenko_update(monkeypatch):
+    tm = pytest.importorskip("timoshenko")
+    import cauren_physics.fe_reference_model as fe_reference_model_module
+
+    delegated = []
+    shared_update_summary = getattr(fe_reference_model_module, "_shared_update_summary", None)
+
+    def record_update_delegation(*args, **kwargs):
+        delegated.append((args, kwargs))
+        return None if shared_update_summary is None else shared_update_summary(*args, **kwargs)
+
+    monkeypatch.setattr(
+        fe_reference_model_module,
+        "_shared_update_summary",
+        record_update_delegation,
+        raising=False,
+    )
+    masses = (50_000.0,)
+    stiffnesses = (8.0e6,)
+    model = ShearBuildingModel(masses, stiffnesses)
+    reference_hz = natural_frequencies_hz(model)[0]
+    current = identify_modal_parameters(_synthetic_signal([math.sqrt(0.81) * reference_hz], 100.0, 60.0), 100.0)
+    engine_structure = tm.Structure(story_masses_kg=masses, story_stiffness_n_m=stiffnesses)
+    engine_modal = tm.modal.identify(
+        tm.SensorData(
+            samples=_synthetic_signal([math.sqrt(0.81) * reference_hz], 100.0, 60.0),
+            sampling_hz=100.0,
+            unit="unknown",
+            channel="test",
+        )
+    )
+
+    result = model_consistency(model, current)
+    updated = tm.update(engine_structure, engine_modal)
+
+    assert delegated
+    assert result["implied_uniform_stiffness_ratio"] == pytest.approx(updated.update_scale_factor, abs=0.01)
