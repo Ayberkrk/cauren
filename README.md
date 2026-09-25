@@ -216,12 +216,11 @@ the Cauren package and single-channel fallback work without it. Install
 Python environment to enable the shared engine path:
 
 ```bash
-python -m pip install "timoshenko-engine @ git+https://github.com/Ayberkrk/timoshenko"
+python -m pip install timoshenko-engine
 ```
 
 The distribution name is `timoshenko-engine`, while the import name is
-`timoshenko`. A PyPI install command should be used only after a release is
-available there.
+`timoshenko`.
 
 ```bash
 # Full explainable review over real data (repo ships a small public dataset)
