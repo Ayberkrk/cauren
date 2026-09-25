@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+data/cauren_bridge
+data/public_sources
+tests
+LLM
+operations

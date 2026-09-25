@@ -250,6 +250,26 @@ per-tenant access control. It's meant to be run locally or behind
 whatever the operator puts in front of it (a reverse proxy, an auth
 layer), not exposed to the open internet as-is.
 
+## Run the API with Docker
+
+For a local trial, Docker Compose builds the API image and binds it to
+127.0.0.1 so it is not published on your network by default:
+
+```bash
+docker compose up --build
+```
+
+When the service is ready, open http://127.0.0.1:8000/docs or check
+http://127.0.0.1:8000/health/readiness. Stop it with:
+
+```bash
+docker compose down
+```
+
+This local setup does not add authentication or tenant isolation. Do not
+change the port binding or expose the service publicly without placing
+appropriate access controls in front of it.
+
 ## Quick start
 
 The project is pip-installable from the repo root (`pyproject.toml`

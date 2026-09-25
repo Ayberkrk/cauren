@@ -23,3 +23,14 @@ jobs:
 
       - name: Run the test suite
         run: python -m pytest tests/ -v
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the API image
+        run: docker build --tag cauren-api .
+
+      - name: Smoke test API imports in the image
+        run: docker run --rm --entrypoint python cauren-api -c "from api.app import app; assert app.title"
