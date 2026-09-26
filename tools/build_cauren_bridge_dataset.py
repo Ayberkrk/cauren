@@ -66,6 +66,11 @@ import pandas as pd
 MAX_SEQ_LEN = 16
 MIN_REAL_YEARS = 8
 FEATURES = ["structural_risk_score", "ground_stability_score", "natural_hazard_score"]
+CONDITION_HISTORY_FEATURES = {
+    "deck_condition_risk_score": "deck_cond",
+    "superstructure_condition_risk_score": "superstructure_cond",
+    "substructure_condition_risk_score": "substructure_cond",
+}
 
 RAW_COLS = [
     "STATE_CODE_001", "STRUCTURE_NUMBER_008", "COUNTY_CODE_003",
@@ -168,9 +173,16 @@ def load_nbi(raw_dir: Path, states: set[str]) -> pd.DataFrame:
     nbi["county_code"] = nbi["COUNTY_CODE_003"].str.strip().str.zfill(3)
     nbi["structure_number"] = nbi["STRUCTURE_NUMBER_008"].str.strip()
     nbi["bridge_id"] = nbi["state_code"] + "_" + nbi["county_code"] + "_" + nbi["structure_number"]
-    nbi["deck_cond"] = to_num(nbi["DECK_COND_058"])
-    nbi["superstructure_cond"] = to_num(nbi["SUPERSTRUCTURE_COND_059"])
-    nbi["substructure_cond"] = to_num(nbi["SUBSTRUCTURE_COND_060"])
+    for feature, source_column in (
+        ("deck_cond", "DECK_COND_058"),
+        ("superstructure_cond", "SUPERSTRUCTURE_COND_059"),
+        ("substructure_cond", "SUBSTRUCTURE_COND_060"),
+    ):
+        values = to_num(nbi[source_column])
+        # FHWA condition ratings use integer codes 0-9. Sentinel values such
+        # as 99 are not ratings and must not become either excellent scores
+        # or deterioration events.
+        nbi[feature] = values.where(values.between(0, 9))
     nbi["scour_code"] = to_num(nbi["SCOUR_CRITICAL_113"])  # kept for debugging/inspection
     nbi["year_built"] = to_num(nbi["YEAR_BUILT_027"])
     nbi["lat_dd"] = _dms_to_decimal(to_num(nbi["LAT_016"]), is_lon=False)
@@ -239,6 +251,10 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
                       "confidence", "label_source", "event_start", "event_end", "root_cause_hint",
                       "notes", "is_anomaly", "deck_drop_5yr"]
     metadata_fields = ["asset_id", "agent_id", "sector", "metadata_json"]
+    condition_history_fields = [
+        "window_id", "asset_id", "inspection_year", "bridge_age_years",
+        *CONDITION_HISTORY_FEATURES.keys(),
+    ]
     readings_fields = ["window_id", "agent_id", "sector", "asset_id", "client_id", "site_id",
                         "timestamp", "seq_index", "sensor_id", "sensor_name", "unit", "value",
                         "quality", "metadata_json"]
@@ -246,10 +262,12 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
     windows_fp = open(agent_dir / "windows.csv", "w", newline="", encoding="utf-8")
     labels_fp = open(agent_dir / "labels.csv", "w", newline="", encoding="utf-8")
     metadata_fp = open(agent_dir / "asset_metadata.csv", "w", newline="", encoding="utf-8")
+    condition_history_fp = open(agent_dir / "condition_history.csv", "w", newline="", encoding="utf-8")
     readings_fp = open(agent_dir / "raw_sensor_readings.csv", "w", newline="", encoding="utf-8")
     windows_w = csv.DictWriter(windows_fp, fieldnames=windows_fields); windows_w.writeheader()
     labels_w = csv.DictWriter(labels_fp, fieldnames=labels_fields); labels_w.writeheader()
     metadata_w = csv.DictWriter(metadata_fp, fieldnames=metadata_fields); metadata_w.writeheader()
+    condition_history_w = csv.DictWriter(condition_history_fp, fieldnames=condition_history_fields); condition_history_w.writeheader()
     readings_w = csv.DictWriter(readings_fp, fieldnames=readings_fields); readings_w.writeheader()
 
     window_idx = 0
@@ -318,6 +336,18 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
         metadata_w.writerow({"asset_id": bridge_id, "agent_id": "cauren-bridge", "sector": "civil", "metadata_json": metadata_json})
 
         for seq_index, (_, row) in enumerate(window.iterrows()):
+            year_built = row["year_built"]
+            component_scores = {
+                feature: "" if pd.isna(row[source_column]) else str(round(1.0 - float(row[source_column]) / 9.0, 6))
+                for feature, source_column in CONDITION_HISTORY_FEATURES.items()
+            }
+            condition_history_w.writerow({
+                "window_id": window_id,
+                "asset_id": bridge_id,
+                "inspection_year": int(row["year"]),
+                "bridge_age_years": "" if pd.isna(year_built) else int(row["year"] - year_built),
+                **component_scores,
+            })
             for feature in FEATURES:
                 value = row[feature]
                 readings_w.writerow({
@@ -331,7 +361,7 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
                 })
         window_ids_by_bridge.append((window_id, bridge_id))
 
-    windows_fp.close(); labels_fp.close(); metadata_fp.close(); readings_fp.close()
+    windows_fp.close(); labels_fp.close(); metadata_fp.close(); condition_history_fp.close(); readings_fp.close()
 
     bridge_ids_unique = sorted({bid for _wid, bid in window_ids_by_bridge})
     rng = np.random.default_rng(seed)
@@ -381,6 +411,19 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
                 "unevaluated but documented by FHWA as low risk) is scored "
                 f"{ITEM_113_TIDAL_UNEVALUATED_RISK}."
             ),
+        },
+        "auxiliary_feature_artifacts": {
+            "condition_history.csv": {
+                "features": list(CONDITION_HISTORY_FEATURES),
+                "time_feature": "inspection_year",
+                "static_metadata_feature": "bridge_age_years",
+                "description": (
+                    "Per-window historical deck, superstructure, and substructure risk scores derived "
+                    "from the original FHWA ratings. Rows are truncated at the prediction anchor year; "
+                    "this auxiliary file is for model comparison and does not change the three-feature "
+                    "cauren-bridge runtime contract."
+                ),
+            }
         },
         "license_posture": "public_research_reproducible_cc_by_4.0",
         "source": "FHWA National Bridge Inventory 2000-2023 (via sweetapricity/bridgedeck-nbi, sweetapricity/bridgedeck-nshm, sweetapricity/bridgedeck-nfhl on Hugging Face)",
