@@ -50,6 +50,7 @@ from cauren_core.training import (
     _select_window_ids,
     _stack_tensors,
 )
+from tools.bridge_model_metrics import score_metrics
 
 # Sigmoid output at or above this counts as a positive (deterioration)
 # prediction. Documented here rather than left as a bare literal because
@@ -165,8 +166,10 @@ def evaluate_on_test_split(*, dataset_dir: Path, checkpoint_path: Path, agent_id
         keep = label_mask.bool()
         true_labels = label_values[keep].tolist()
         predicted_labels = predicted[keep].tolist()
+        probabilities = torch.sigmoid(output["risk_logit"])[keep].tolist()
 
     metrics = compute_classification_metrics(true_labels=true_labels, predicted_labels=predicted_labels)
+    score_summary = score_metrics(true_labels, probabilities, threshold=PREDICTION_THRESHOLD)
     positive_rate = sum(true_labels) / len(true_labels) if true_labels else None
     majority_baseline = max(positive_rate, 1.0 - positive_rate) if positive_rate is not None else None
     return {
@@ -183,6 +186,13 @@ def evaluate_on_test_split(*, dataset_dir: Path, checkpoint_path: Path, agent_id
         "test_confusion_matrix": metrics["confusion_matrix"],
         "test_bce": round(bce_mean, 6),
         "test_majority_baseline": round(majority_baseline, 6) if majority_baseline is not None else None,
+        "test_pr_auc_average_precision": score_summary.get("pr_auc_average_precision"),
+        "test_brier_score": score_summary.get("brier_score"),
+        "test_expected_calibration_error_10_equal_frequency_bins": score_summary.get(
+            "expected_calibration_error_10_equal_frequency_bins"
+        ),
+        "test_false_alarms_at_threshold": score_summary.get("threshold_metrics", {}).get("false_alarms"),
+        "test_inspection_capacity": score_summary.get("inspection_capacity", {}),
     }
 
 

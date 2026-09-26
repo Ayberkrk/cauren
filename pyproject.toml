@@ -45,6 +45,13 @@ dataset = [
   "pandas>=2.0",
   "scipy>=1.10",
 ]
+# Leakage-aware bridge model comparison (tools/benchmark_cauren_bridge_models.py).
+# The benchmark streams the large readings CSV and fits models serially; no
+# deep-learning or GPU dependency is required for the tabular comparisons.
+benchmark = [
+  "numpy>=1.24",
+  "scikit-learn>=1.5",
+]
 
 [project.urls]
 Homepage = "https://github.com/Ayberkrk/cauren"

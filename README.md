@@ -186,6 +186,17 @@ This project is a working research prototype, not a finished product.
   time, physics-relation reasoning between scores, and an explainable
   diagnosis, not score generation from raw measurements.
 
+### Bridge model comparison
+
+`tools/benchmark_cauren_bridge_models.py` compares the bridge models on the
+same bridge-disjoint splits using PR-AUC, Brier score, calibration error, and
+recall and false alarms when reviewing the highest-risk 5% or 10% of bridges.
+On the local v3 split, an additive logistic model with score history, bridge
+age, and inspection gaps ranked deterioration best (PR-AUC 0.426 versus 0.260
+for the base rate) but did not show reliable transfer across states, so no new
+probability is exposed through the API. Protocol, results, and reproduction
+steps are in [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
+
 ## What ships with every diagnosis
 
 Beyond the risk score itself, each diagnosis carries the checks that were
@@ -257,7 +268,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (115 tests with the minimal dependency set; 130 total once pandas/torch/PyYAML are also installed) |
+| `tests/` | Test suite (125 tests with the minimal dependency set; 140 total once pandas/torch/PyYAML are also installed) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -304,7 +315,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 115 tests, no network/GPU/numpy/torch required (130 total with pandas/torch/PyYAML also installed)
+python3 -m pytest tests/            # 125 tests, no network/GPU/numpy/torch required (140 total with pandas/torch/PyYAML also installed)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
