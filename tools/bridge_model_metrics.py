@@ -71,10 +71,20 @@ def score_metrics(
         bins.setdefault(bin_index, []).extend(calibration_order[index:end])
         index = end
     ece = 0.0
+    calibration_bins = []
     for bucket in bins.values():
         observed = sum(label for label, _score in bucket) / len(bucket)
         predicted = sum(score for _label, score in bucket) / len(bucket)
         ece += len(bucket) / len(pairs) * abs(observed - predicted)
+        calibration_bins.append(
+            {
+                "count": len(bucket),
+                "mean_predicted_probability": round(predicted, 6),
+                "observed_positive_rate": round(observed, 6),
+            }
+        )
+
+    calibration_intercept, calibration_slope, calibration_fit_status = _calibration_logistic_fit(pairs)
 
     predicted_positive = [(label, score) for label, score in pairs if score >= threshold]
     tp = sum(label for label, _score in predicted_positive)
@@ -87,6 +97,10 @@ def score_metrics(
         "pr_auc_average_precision": round(average_precision, 6),
         "brier_score": round(brier, 6),
         "expected_calibration_error_10_equal_frequency_bins": round(ece, 6),
+        "calibration_intercept": round(calibration_intercept, 6) if calibration_intercept is not None else None,
+        "calibration_slope": round(calibration_slope, 6) if calibration_slope is not None else None,
+        "calibration_fit_status": calibration_fit_status,
+        "calibration_bins": calibration_bins,
         "threshold": threshold,
         "threshold_metrics": {
             "precision": round(tp / max(1, tp + fp), 6),
@@ -127,3 +141,56 @@ def score_metrics(
             "precision": round(selected_tp / selected_count, 6),
         }
     return result
+
+
+def _calibration_logistic_fit(pairs: list[tuple[int, float]]) -> tuple[float | None, float | None, str]:
+    """Fit observed outcomes to logit probabilities for calibration diagnosis."""
+    if len({label for label, _score in pairs}) < 2:
+        return None, None, "not_identifiable_single_class"
+    if max(score for _label, score in pairs) - min(score for _label, score in pairs) < 1e-12:
+        return None, None, "not_identifiable_constant_scores"
+    positive_scores = [score for label, score in pairs if label]
+    negative_scores = [score for label, score in pairs if not label]
+    if max(negative_scores) < min(positive_scores) or max(positive_scores) < min(negative_scores):
+        return None, None, "not_identifiable_perfect_separation"
+    eps = 1e-6
+    design = []
+    labels = []
+    for label, score in pairs:
+        probability = min(1.0 - eps, max(eps, score))
+        logit = math.log(probability / (1.0 - probability))
+        design.append((1.0, logit))
+        labels.append(float(label))
+
+    intercept = 0.0
+    slope = 1.0
+    # Ridge-stabilized Newton updates keep the diagnostic finite under
+    # near-separation and extreme probabilities.
+    for _ in range(80):
+        g0 = g1 = h00 = h01 = h11 = 0.0
+        for (x0, x1), label in zip(design, labels):
+            linear = max(-35.0, min(35.0, intercept * x0 + slope * x1))
+            probability = 1.0 / (1.0 + math.exp(-linear))
+            residual = probability - label
+            weight = max(probability * (1.0 - probability), 1e-7)
+            g0 += residual * x0
+            g1 += residual * x1
+            h00 += weight * x0 * x0
+            h01 += weight * x0 * x1
+            h11 += weight * x1 * x1
+        # Do not penalize the intercept. A tiny slope penalty prevents a
+        # singular update for constant or almost-constant predictions.
+        g1 += 1e-8 * slope
+        h11 += 1e-8
+        determinant = h00 * h11 - h01 * h01
+        if abs(determinant) < 1e-14:
+            break
+        step_intercept = (h11 * g0 - h01 * g1) / determinant
+        step_slope = (h00 * g1 - h01 * g0) / determinant
+        intercept -= step_intercept
+        slope -= step_slope
+        if max(abs(step_intercept), abs(step_slope)) < 1e-7:
+            break
+    if not math.isfinite(intercept) or not math.isfinite(slope) or max(abs(intercept), abs(slope)) > 50.0:
+        return None, None, "numerically_unstable_or_separated"
+    return intercept, slope, "fitted"

@@ -407,6 +407,8 @@ def _fit_hist_gradient_boosting(
     y: np.ndarray,
     train_mask: np.ndarray,
     score_masks: dict[str, np.ndarray],
+    *,
+    include_predictions: bool = False,
 ) -> dict[str, Any]:
     try:
         from sklearn.ensemble import HistGradientBoostingClassifier
@@ -423,7 +425,7 @@ def _fit_hist_gradient_boosting(
     )
     model.fit(x[train_mask], y[train_mask].astype(int))
     predictions = model.predict_proba(x)[:, 1]
-    return {
+    result = {
         "status": "completed",
         "configuration": {
             "learning_rate": 0.06,
@@ -437,9 +439,12 @@ def _fit_hist_gradient_boosting(
             for split, mask in score_masks.items()
         },
     }
+    if include_predictions:
+        result["predictions"] = predictions.tolist()
+    return result
 
 
-def _run_hybrid(dataset_dir: Path, checkpoint: Path) -> dict[str, Any]:
+def _run_hybrid(dataset_dir: Path, checkpoint: Path, *, include_predictions: bool = False) -> dict[str, Any]:
     if not checkpoint.exists():
         return {"status": "skipped", "reason": f"checkpoint not found: {checkpoint}"}
     try:
@@ -449,6 +454,7 @@ def _run_hybrid(dataset_dir: Path, checkpoint: Path) -> dict[str, Any]:
             dataset_dir=dataset_dir,
             checkpoint_path=checkpoint,
             agent_id="cauren-bridge",
+            include_window_predictions=include_predictions,
         )
     except RuntimeError:
         return {"status": "skipped", "reason": "PyTorch is not installed in this Python environment"}
@@ -461,6 +467,8 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=Path("cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt"))
     parser.add_argument("--skip-hybrid", action="store_true", help="Do not make a second streamed pass for the saved neural checkpoint")
     parser.add_argument("--output-json", type=Path, help="Optional path for the complete machine-readable report")
+    parser.add_argument("--output-predictions", type=Path, help="Optional CSV of per-window test probabilities from every completed model")
+    parser.add_argument("--skip-geographic-holdout", action="store_true", help="Skip strict leave-one-state-out refits")
     args = parser.parse_args()
 
     windows, labels = _read_windows(args.dataset_dir)
@@ -486,8 +494,13 @@ def main() -> None:
     last_score_model = _fit_logistic(x[train_mask][:, [structural_feature]], y[train_mask])
     last_score_predictions = _predict_logistic(last_score_model, x[:, [structural_feature]])
 
-    score_masks = {"validation": validation_mask, "test": test_mask}
+    state_names = sorted(set(states.tolist()))
+    test_state_masks = {f"test_by_state_{state}": test_mask & (states == state) for state in state_names}
+    score_masks = {"validation": validation_mask, "test": test_mask, **test_state_masks}
     full_logistic_metrics = _fit_and_score_logistic(x, y, train_mask, score_masks)
+    core_history_width = len(feature_names) * len(FEATURE_SUMMARIES)
+    same_input_matrix = x[:, :core_history_width]
+    same_input_metrics = _fit_and_score_logistic(same_input_matrix, y, train_mask, score_masks)
     persistence_metrics = {
         split: score_metrics(y[mask].tolist(), last_score_predictions[mask].tolist())
         for split, mask in score_masks.items()
@@ -497,15 +510,141 @@ def main() -> None:
         for split, mask in score_masks.items()
     }
 
-    state_holdouts = {}
-    for state in sorted(set(states.tolist())):
+    state_holdouts: dict[str, Any] = {}
+    for state in state_names:
         state_test = states == state
         state_train = (splits == "train") & ~state_test
         if not state_train.any() or not state_test.any():
             continue
-        state_model = _fit_logistic(x[state_train], y[state_train])
-        state_predictions = _predict_logistic(state_model, x[state_test])
-        state_holdouts[state] = score_metrics(y[state_test].tolist(), state_predictions.tolist())
+        state_score_masks = {"held_out_state": state_test}
+        state_logistic = _fit_logistic(x[state_train], y[state_train])
+        state_logistic_predictions = _predict_logistic(state_logistic, x)
+        state_core_logistic = _fit_logistic(same_input_matrix[state_train], y[state_train])
+        state_core_predictions = _predict_logistic(state_core_logistic, same_input_matrix)
+        state_prior = float(np.mean(y[state_train]))
+        state_predictions = {
+            "train_prevalence": np.full(len(y), state_prior),
+            "last_structural_score_logistic": _predict_logistic(
+                _fit_logistic(x[state_train][:, [structural_feature]], y[state_train]),
+                x[:, [structural_feature]],
+            ),
+            "same_input_additive_logistic": state_core_predictions,
+            "expanded_additive_logistic": state_logistic_predictions,
+        }
+        state_hgb = _fit_hist_gradient_boosting(
+            x, y, state_train, state_score_masks, include_predictions=True
+        )
+        if state_hgb.get("status") == "completed":
+            state_predictions["hist_gradient_boosting"] = np.asarray(
+                state_hgb["predictions"], dtype=np.float64
+            )
+        state_core_hgb = _fit_hist_gradient_boosting(
+            same_input_matrix, y, state_train, state_score_masks, include_predictions=True
+        )
+        if state_core_hgb.get("status") == "completed":
+            state_predictions["same_input_hist_gradient_boosting"] = np.asarray(
+                state_core_hgb["predictions"], dtype=np.float64
+            )
+        state_holdouts[state] = {
+            "train_windows": int(state_train.sum()),
+            "held_out_windows": int(state_test.sum()),
+            "models": {
+                name: score_metrics(y[state_test].tolist(), values[state_test].tolist())
+                for name, values in state_predictions.items()
+            },
+        }
+
+    hgb_results = _fit_hist_gradient_boosting(
+        x, y, train_mask, score_masks, include_predictions=bool(args.output_predictions)
+    )
+    same_input_hgb_results = _fit_hist_gradient_boosting(
+        same_input_matrix,
+        y,
+        train_mask,
+        score_masks,
+        include_predictions=bool(args.output_predictions),
+    )
+    hybrid_result = (
+        {"status": "skipped", "reason": "disabled by --skip-hybrid"}
+        if args.skip_hybrid
+        else _run_hybrid(
+            args.dataset_dir,
+            args.checkpoint,
+            include_predictions=bool(args.output_predictions),
+        )
+    )
+    if hybrid_result.get("status") == "completed":
+        hybrid_metrics = hybrid_result.get("metrics", {})
+        observed = int(hybrid_metrics.get("labeled_windows", 0))
+        expected = int(test_mask.sum())
+        if observed != expected:
+            raise ValueError(
+                f"Hybrid scored {observed} labeled test windows, while every baseline scored {expected}; "
+                "refusing a non-aligned comparison"
+            )
+
+    if args.output_predictions:
+        test_ids = list(windows)
+        export_predictions: dict[str, list[float]] = {
+            "train_prevalence": prior_predictions,
+            "last_structural_score_logistic": last_score_predictions,
+            "same_input_additive_logistic": _predict_logistic(
+                _fit_logistic(same_input_matrix[train_mask], y[train_mask]), same_input_matrix
+            ),
+            "expanded_additive_logistic": _predict_logistic(
+                _fit_logistic(x[train_mask], y[train_mask]), x
+            ),
+        }
+        if hgb_results.get("status") == "completed":
+            export_predictions["hist_gradient_boosting"] = hgb_results.pop("predictions")
+        if same_input_hgb_results.get("status") == "completed":
+            export_predictions["same_input_hist_gradient_boosting"] = same_input_hgb_results.pop("predictions")
+        args.output_predictions.parent.mkdir(parents=True, exist_ok=True)
+        with args.output_predictions.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(("window_id", "asset_id", "state", "split", "label", "model", "probability"))
+            for model_name, probabilities in export_predictions.items():
+                for index, window_id in enumerate(test_ids):
+                    if test_mask[index]:
+                        writer.writerow(
+                            (
+                                window_id,
+                                metadata[index]["asset_id"],
+                                states[index],
+                                splits[index],
+                                int(y[index]),
+                                model_name,
+                                f"{float(probabilities[index]):.10f}",
+                            )
+                        )
+            hybrid_predictions = hybrid_result.get("metrics", {}).pop("window_predictions", [])
+            for prediction in hybrid_predictions:
+                window_id = prediction["window_id"]
+                window = windows[window_id]
+                writer.writerow(
+                    (
+                        window_id,
+                        window["asset_id"],
+                        prediction["state"],
+                        "test",
+                        prediction["label"],
+                        "saved_hybrid_checkpoint",
+                        f"{prediction['probability']:.10f}",
+                    )
+                )
+
+    if args.skip_geographic_holdout:
+        geographic_holdouts: dict[str, Any] = {
+            "status": "skipped",
+            "reason": "disabled by --skip-geographic-holdout",
+        }
+    else:
+        from tools.bridge_geographic_holdout import run_geographic_holdouts
+
+        geographic_holdouts = run_geographic_holdouts(
+            dataset_dir=args.dataset_dir,
+            checkpoint_root=args.checkpoint.parent,
+        )
 
     report: dict[str, Any] = {
         "dataset": {
@@ -539,24 +678,32 @@ def main() -> None:
                 "features": ["structural_risk_score__last"],
                 "metrics": persistence_metrics,
             },
+            "same_input_additive_logistic": {
+                "feature_tier": "three_core_features_only",
+                "features": core_history_width,
+                "l2": 0.2,
+                "metrics": same_input_metrics,
+            },
             "additive_logistic_with_time_and_age": {
+                "feature_tier": "expanded_engineered_features",
                 "features": len(names),
                 "l2": 0.2,
                 "metrics": full_logistic_metrics,
             },
-            "hist_gradient_boosting": _fit_hist_gradient_boosting(x, y, train_mask, score_masks),
+            "hist_gradient_boosting": hgb_results,
+            "same_input_hist_gradient_boosting": same_input_hgb_results,
         },
         "leave_one_state_out_additive_logistic": state_holdouts,
-        "saved_hybrid_checkpoint": (
-            {"status": "skipped", "reason": "disabled by --skip-hybrid"}
-            if args.skip_hybrid
-            else _run_hybrid(args.dataset_dir, args.checkpoint)
-        ),
+        "strict_leave_one_state_out_all_models": geographic_holdouts,
+        "saved_hybrid_checkpoint": hybrid_result,
         "protocol": {
             "model_fitting_split": "train only",
             "threshold": 0.5,
             "threshold_tuned_on_test": False,
             "capacity_metrics": ["top_5_percent", "top_10_percent"],
+            "same_input_primary_comparison": "saved hybrid, last-score logistic, and additive logistic use the same three core feature histories",
+            "geographic_test_slices": "saved checkpoint and tabular models are scored on identical test bridges by state",
+            "strict_geographic_holdout": "tabular baselines and the hybrid model are refit after excluding all windows from the held-out state",
             "linear_model": "L2-regularized additive logistic regression fit by Newton iterations",
             "execution": "single process; BLAS/OpenMP thread counts pinned to one",
         },

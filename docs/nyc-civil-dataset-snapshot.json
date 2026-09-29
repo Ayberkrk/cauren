@@ -1,0 +1,450 @@
+{
+  "audit_report": {
+    "all_bin_groups_single_split": true,
+    "blocking_warnings": [
+      "94910 feature rows include static fields from unversioned DOB records; field history must be checked before modeling",
+      "FEMA hazard map vintage follows the permit anchor for 87851 BINs; use point-in-time flood map versions before historical modeling",
+      "manual linkage review is incomplete: 0 reviewed, 57 required",
+      "manual match precision has not met the configured 98.0% point-estimate gate",
+      "natural-hazard score is missing for 336 BINs; attach and audit FEMA/USGS spatial layers before modeling",
+      "only 0 reviewed candidate links are decisive; 20 required",
+      "permit-status score is available for 1447 of 94910 BINs; missing values must remain explicit",
+      "some cohort violations or complaints have no disposition date and are treated as active proxies: dob_complaints_missing_disposition_date=1339, dob_violations_missing_disposition_date=37969"
+    ],
+    "borough_label_status_counts": {
+      "1": {
+        "ambiguous_certificate_candidate": 146,
+        "certificate_type_unresolved": 53,
+        "no_co_issued_recorded_by_horizon": 2165,
+        "positive_co_issued_within_horizon": 527,
+        "right_censored_followup": 163
+      },
+      "2": {
+        "ambiguous_certificate_candidate": 202,
+        "certificate_type_unresolved": 19,
+        "no_co_issued_recorded_by_horizon": 10278,
+        "positive_co_issued_within_horizon": 1488,
+        "right_censored_followup": 466
+      },
+      "3": {
+        "ambiguous_certificate_candidate": 1039,
+        "certificate_type_unresolved": 47,
+        "no_co_issued_recorded_by_horizon": 17002,
+        "positive_co_issued_within_horizon": 3740,
+        "right_censored_followup": 918
+      },
+      "4": {
+        "ambiguous_certificate_candidate": 603,
+        "certificate_type_unresolved": 23,
+        "no_co_issued_recorded_by_horizon": 22632,
+        "positive_co_issued_within_horizon": 4727,
+        "right_censored_followup": 1218
+      },
+      "5": {
+        "ambiguous_certificate_candidate": 1299,
+        "certificate_type_unresolved": 6,
+        "no_co_issued_recorded_by_horizon": 21259,
+        "positive_co_issued_within_horizon": 4130,
+        "right_censored_followup": 760
+      }
+    },
+    "building_count": 94910,
+    "dataset_id": "cauren_civil_nyc_new_building_bin_co_v2",
+    "dataset_ready_for_modeling": false,
+    "errors": [],
+    "explicit_late_date_rows_removed": 3,
+    "finding_rows_missing_disposition_date": {
+      "dob_complaints_missing_disposition_date": 1339,
+      "dob_violations_missing_disposition_date": 37969
+    },
+    "label_status_counts": {
+      "ambiguous_certificate_candidate": 3289,
+      "certificate_type_unresolved": 148,
+      "no_co_issued_recorded_by_horizon": 73336,
+      "positive_co_issued_within_horizon": 14612,
+      "right_censored_followup": 3525
+    },
+    "manual_linkage_review": {
+      "ambiguous": 0,
+      "confirmed_match": 0,
+      "confirmed_no_record": 0,
+      "decisive_match_precision": null,
+      "decisive_match_precision_wilson_95": null,
+      "false_match": 0,
+      "gate_passed": false,
+      "minimum_decisive_matches_gate": 20,
+      "minimum_precision_gate": 0.98,
+      "minimum_precision_wilson_lower_bound_gate": 0.9,
+      "minimum_reviewed_gate": 57,
+      "reviewed": 0,
+      "sampled": 57
+    },
+    "natural_hazard_missing_rows": 336,
+    "natural_hazard_vintage_after_anchor_rows": 87851,
+    "permit_status_score_coverage": 1447,
+    "source_extraction_complete": true,
+    "source_record_version_unavailable_rows": 94910,
+    "warnings": [
+      "94910 feature rows include static fields from unversioned DOB records; field history must be checked before modeling",
+      "FEMA hazard map vintage follows the permit anchor for 87851 BINs; use point-in-time flood map versions before historical modeling",
+      "late-dated source fields were removed from 3 permit rows",
+      "manual linkage review is incomplete: 0 reviewed, 57 required",
+      "manual match precision has not met the configured 98.0% point-estimate gate",
+      "natural-hazard score is missing for 336 BINs; attach and audit FEMA/USGS spatial layers before modeling",
+      "only 0 reviewed candidate links are decisive; 20 required",
+      "permit-status score is available for 1447 of 94910 BINs; missing values must remain explicit",
+      "some cohort violations or complaints have no disposition date and are treated as active proxies: dob_complaints_missing_disposition_date=1339, dob_violations_missing_disposition_date=37969"
+    ]
+  },
+  "dataset_id": "cauren_civil_nyc_new_building_bin_co_v2",
+  "dataset_summary": {
+    "all_required_feeds_downloaded": true,
+    "as_of_date": "2026-09-28",
+    "building_count": 94910,
+    "certificate_counts": {
+      "bis_certificates_rows": 53477,
+      "dob_now_certificates_rows": 33825
+    },
+    "cohort": "NYC DOB new-building BINs",
+    "cohort_bin_count": 94910,
+    "cohort_bin_sha256": "0b5bc3e4a9096d756651bfb628f74a0ab75227e39f003860972eda8ee852e20b",
+    "cohort_scope_matches_source_manifest": true,
+    "complete_extraction": true,
+    "coordinate_coverage": {
+      "fraction": 0.9964598040248657,
+      "total": 94910,
+      "with_coordinates": 94574
+    },
+    "dataset_id": "cauren_civil_nyc_new_building_bin_co_v2",
+    "entity": "one building record per normalized NYC BIN",
+    "feature_contract": {
+      "cauren_civil_eight_score_schema_generated": false,
+      "inspection_finding_score": "min(1, active dated DOB violations plus complaints at anchor divided by 5); missing disposition dates are conservatively counted as active proxies and audited",
+      "natural_hazard_score": "0.6 * clamp(USGS 2%-in-50-year PGA / 0.6, 0, 1) + 0.4 * FEMA Special Flood Hazard Area flag; source vintages and missing coverage remain explicit",
+      "outcome_link": "BIN-level earliest qualifying non-temporary CO across BIS and DOB NOW; job ID match is recorded as confidence evidence",
+      "permit_status_score": "mean 0/1 status friction across matched DOB NOW filings whose filing and current-status dates are no later than anchor; 1=objection/hold/incomplete/withdrawal, 0=approved/issued",
+      "prediction_anchor": "earliest permit issuance date among DOB new-building permit rows for the BIN",
+      "raw_fields_preserved_in": "features.csv:feature_source_fields_json and source JSONL",
+      "source_record_versioning": "current Socrata snapshots do not contain full historical field versions; dated-event features are anchor-filtered, other permit attributes need temporal validation"
+    },
+    "finding_counts": {
+      "dob_complaints_missing_disposition_date": 1339,
+      "dob_complaints_rows": 463499,
+      "dob_violations_excluded_invalid_bin_or_date": 5,
+      "dob_violations_missing_disposition_date": 37969,
+      "dob_violations_rows": 273958
+    },
+    "label_status_counts": {
+      "ambiguous_certificate_candidate": 3289,
+      "certificate_type_unresolved": 148,
+      "no_co_issued_recorded_by_horizon": 73336,
+      "positive_co_issued_within_horizon": 14612,
+      "right_censored_followup": 3525
+    },
+    "labeled_building_count": 87948,
+    "leakage_date_fields_removed": {
+      "filing_date": 3
+    },
+    "linkage_review_required_before_modeling": true,
+    "linkage_review_sample_size": 57,
+    "manual_review_file": "linkage_review_queue.csv",
+    "match_level_counts": {
+      "bin_only_co_issued_links": 16,
+      "buildings_with_any_issued_co_in_horizon": 18921,
+      "buildings_with_co_issued_in_horizon": 14612,
+      "buildings_with_temporary_co_in_horizon": 3040,
+      "match_level_bbl_conflict": 3289,
+      "match_level_bin_and_job": 14596,
+      "match_level_bin_only": 209,
+      "match_level_no_certificate_candidate": 3480,
+      "match_level_no_co_record_in_either_feed": 73336
+    },
+    "natural_hazard_scored_building_count": 94574,
+    "natural_hazard_source_manifest": {
+      "building_count": 94910,
+      "coordinate_count": 94574,
+      "coordinate_fraction": 0.9964598040248657,
+      "created_at_utc": "2026-09-29T13:42:40+00:00",
+      "fema": {
+        "coverage_note": "NYSDOS-hosted FEMA NFHL reduced layer omits low-risk X polygons and is derived from the 2021-10-13 NFHL; a polygon hit is positive SFHA evidence, while non-hit is provisional absent a separate map-availability confirmation.",
+        "nfhl_source_vintage": "2021-10-13",
+        "polygon_page_count": 1,
+        "query": "NYC coordinate envelope; SFHA_TF = T polygons only; point-in-polygon join",
+        "sfha_building_count": 1040,
+        "sfha_polygon_count": 750,
+        "source": "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query",
+        "source_item_id": "b7d24ccb42ed43dabf3302a93bc15811"
+      },
+      "input_feature_file": "data/cauren_civil_nyc/normalized/features.csv",
+      "score_file": "data/cauren_civil_nyc/normalized/hazard_scores.csv",
+      "score_formula": "0.6 * clamp(PGA_2pct_50yr_g / 0.6, 0, 1) + 0.4 * FEMA SFHA flag",
+      "usgs": {
+        "errors": [],
+        "grid_cells_failed_or_missing": 0,
+        "grid_cells_requested": 57,
+        "missing_building_values": 336,
+        "model": "conus-2023.R2",
+        "model_release_reference": "https://doi.org/10.5066/P14VGAV4",
+        "query": "nearest 0.05-degree point, site class D, PGA; log-log interpolate hazard curve at 2% probability of exceedance in 50 years",
+        "source": "https://earthquake.usgs.gov/ws/nshmp/conus-2023.R2/static/hazard"
+      }
+    },
+    "outcome_horizon_sensitivity": {
+      "2": {
+        "ambiguous_certificate_candidate": 1816,
+        "binary_labeled": 90857,
+        "certificate_type_unresolved": 11,
+        "negative": 83418,
+        "positive": 7439,
+        "positive_rate_among_binary_labeled": 0.08187591489923726,
+        "right_censored": 2226
+      },
+      "3": {
+        "ambiguous_certificate_candidate": 2801,
+        "binary_labeled": 89320,
+        "certificate_type_unresolved": 37,
+        "negative": 78138,
+        "positive": 11182,
+        "positive_rate_among_binary_labeled": 0.12519032691446486,
+        "right_censored": 2752
+      },
+      "4": {
+        "ambiguous_certificate_candidate": 3212,
+        "binary_labeled": 88489,
+        "certificate_type_unresolved": 96,
+        "negative": 75189,
+        "positive": 13300,
+        "positive_rate_among_binary_labeled": 0.1503011673767361,
+        "right_censored": 3113
+      },
+      "5": {
+        "ambiguous_certificate_candidate": 3289,
+        "binary_labeled": 87948,
+        "certificate_type_unresolved": 148,
+        "negative": 73336,
+        "positive": 14612,
+        "positive_rate_among_binary_labeled": 0.1661436303270114,
+        "right_censored": 3525
+      },
+      "6": {
+        "ambiguous_certificate_candidate": 3252,
+        "binary_labeled": 87656,
+        "certificate_type_unresolved": 207,
+        "negative": 71964,
+        "positive": 15692,
+        "positive_rate_among_binary_labeled": 0.17901797937391623,
+        "right_censored": 3795
+      },
+      "7": {
+        "ambiguous_certificate_candidate": 3135,
+        "binary_labeled": 87491,
+        "certificate_type_unresolved": 258,
+        "negative": 70992,
+        "positive": 16499,
+        "positive_rate_among_binary_labeled": 0.18857939673795018,
+        "right_censored": 4026
+      }
+    },
+    "outcome_horizon_years": 5,
+    "permit_counts": {
+      "bis_permits_excluded": 2500,
+      "bis_permits_new_building_rows": 569368,
+      "bis_permits_rows": 571868,
+      "dob_now_filing_rows": 56874,
+      "dob_now_permits_classified_from_job_filing": 67357,
+      "dob_now_permits_excluded": 938743,
+      "dob_now_permits_new_building_rows": 67357,
+      "dob_now_permits_rows": 1006100,
+      "duplicate_permit_rows": 533811
+    },
+    "permit_episode_count": 102914,
+    "positive_rate_among_binary_labeled_buildings": 0.1661436303270114,
+    "source_dataset_ids": {
+      "bis_certificates": "bs8b-p36w",
+      "bis_permits": "ipu4-2q9a",
+      "dob_complaints": "eabe-havv",
+      "dob_now_certificates": "pkdm-hqz6",
+      "dob_now_filings": "w9ak-ipjd",
+      "dob_now_permits": "rbx6-tga4",
+      "dob_violations": "3h2n-5cm9"
+    },
+    "source_manifest_path": "data/cauren_civil_nyc/raw/source_manifest.json",
+    "split_counts": {
+      "test": 11077,
+      "train": 72574,
+      "validation": 11259
+    },
+    "split_grouping": "one BIN is one entity and is assigned wholly to one deterministic hash split",
+    "target": "qualifying non-temporary CO issued by either DOB system within the configured horizon after the earliest new-building permit issuance for the BIN",
+    "target_is_engineering_safety_truth": false,
+    "unique_bin_count": 94910
+  },
+  "hazard_source_manifest": {
+    "building_count": 94910,
+    "coordinate_count": 94574,
+    "coordinate_fraction": 0.9964598040248657,
+    "created_at_utc": "2026-09-29T13:42:40+00:00",
+    "fema": {
+      "coverage_note": "NYSDOS-hosted FEMA NFHL reduced layer omits low-risk X polygons and is derived from the 2021-10-13 NFHL; a polygon hit is positive SFHA evidence, while non-hit is provisional absent a separate map-availability confirmation.",
+      "nfhl_source_vintage": "2021-10-13",
+      "polygon_page_count": 1,
+      "query": "NYC coordinate envelope; SFHA_TF = T polygons only; point-in-polygon join",
+      "sfha_building_count": 1040,
+      "sfha_polygon_count": 750,
+      "source": "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0/query",
+      "source_item_id": "b7d24ccb42ed43dabf3302a93bc15811"
+    },
+    "input_feature_file": "data/cauren_civil_nyc/normalized/features.csv",
+    "score_file": "data/cauren_civil_nyc/normalized/hazard_scores.csv",
+    "score_formula": "0.6 * clamp(PGA_2pct_50yr_g / 0.6, 0, 1) + 0.4 * FEMA SFHA flag",
+    "usgs": {
+      "errors": [],
+      "grid_cells_failed_or_missing": 0,
+      "grid_cells_requested": 57,
+      "missing_building_values": 336,
+      "model": "conus-2023.R2",
+      "model_release_reference": "https://doi.org/10.5066/P14VGAV4",
+      "query": "nearest 0.05-degree point, site class D, PGA; log-log interpolate hazard curve at 2% probability of exceedance in 50 years",
+      "source": "https://earthquake.usgs.gov/ws/nshmp/conus-2023.R2/static/hazard"
+    }
+  },
+  "raw_source_rows_committed": false,
+  "snapshot_date": "2026-09-29",
+  "source_snapshot": {
+    "all_required_feeds_downloaded": true,
+    "cohort_bin_count": 94910,
+    "cohort_bin_sha256": "0b5bc3e4a9096d756651bfb628f74a0ab75227e39f003860972eda8ee852e20b",
+    "cohort_scope": "NYC new-building BIN cohort; findings feeds queried only for these BINs",
+    "complete_extraction": true,
+    "dataset_id": "cauren_civil_nyc_dob_sources_v1",
+    "finished_at_utc": "2026-09-29T13:34:34+00:00",
+    "sources": {
+      "bis_certificates": {
+        "complete_extraction": true,
+        "dataset_id": "bs8b-p36w",
+        "default_where": "job_type = 'NB'",
+        "max_rows_limit": null,
+        "page_size": 50000,
+        "pagination": "Socrata :id keyset",
+        "raw_file": "bis_certificates.jsonl",
+        "row_count": 53477,
+        "sha256": "59990a4946f02b4114161b713ab5f4778d134d5e32f33e4cb805123e2fcae450",
+        "snapshot_finished_at_utc": "2026-09-29T06:50:11+00:00",
+        "snapshot_started_at_utc": "2026-09-29T06:49:13+00:00",
+        "soql_where": "job_type = 'NB'",
+        "source_key": "bis_certificates",
+        "title": "DOB Certificate of Occupancy (BIS)",
+        "url": "https://data.cityofnewyork.us/resource/bs8b-p36w.json"
+      },
+      "bis_permits": {
+        "complete_extraction": true,
+        "dataset_id": "ipu4-2q9a",
+        "default_where": "job_type = 'NB'",
+        "max_rows_limit": null,
+        "page_size": 50000,
+        "pagination": "Socrata :id keyset",
+        "raw_file": "bis_permits.jsonl",
+        "row_count": 571868,
+        "sha256": "c2914fc0fedb8e24c880d8371372de2839546d9e537a01416e4d89b6b557d7bb",
+        "snapshot_finished_at_utc": "2026-09-29T06:18:00+00:00",
+        "snapshot_started_at_utc": "2026-09-29T05:56:24+00:00",
+        "soql_where": "job_type = 'NB'",
+        "source_key": "bis_permits",
+        "title": "DOB Permit Issuance (BIS)",
+        "url": "https://data.cityofnewyork.us/resource/ipu4-2q9a.json"
+      },
+      "dob_complaints": {
+        "bin_chunk_size": 250,
+        "bin_scope_count": 94910,
+        "bin_scope_sha256": "0b5bc3e4a9096d756651bfb628f74a0ab75227e39f003860972eda8ee852e20b",
+        "complete_extraction": true,
+        "dataset_id": "eabe-havv",
+        "extraction_scope": "all_records_for_cohort_bins",
+        "page_size": 10000,
+        "pagination": "Socrata :id keyset within complete cohort BIN chunks",
+        "raw_file": "dob_complaints_cohort.jsonl",
+        "row_count": 463499,
+        "sha256": "1b56339fbba67f7582657c284ac9035cb7029cb3605ce20be01149e69df41ada",
+        "snapshot_finished_at_utc": "2026-09-29T13:34:33+00:00",
+        "snapshot_started_at_utc": "2026-09-29T13:20:48+00:00",
+        "soql_where": "bin IN cohort BIN list AND (date_entered IS NOT NULL)",
+        "source_key": "dob_complaints",
+        "title": "DOB Complaints Received",
+        "url": "https://data.cityofnewyork.us/resource/eabe-havv.json",
+        "where": "date_entered IS NOT NULL"
+      },
+      "dob_now_certificates": {
+        "complete_extraction": true,
+        "dataset_id": "pkdm-hqz6",
+        "default_where": "upper(job_type) = 'NEW BUILDING'",
+        "max_rows_limit": null,
+        "page_size": 50000,
+        "pagination": "Socrata :id keyset",
+        "raw_file": "dob_now_certificates.jsonl",
+        "row_count": 33825,
+        "sha256": "5b35d0ba80b0d774e60dc0cb76c3b2f638c6e479ea79a4972befa008e2bb51ce",
+        "snapshot_finished_at_utc": "2026-09-29T06:50:49+00:00",
+        "snapshot_started_at_utc": "2026-09-29T06:50:11+00:00",
+        "soql_where": "upper(job_type) = 'NEW BUILDING'",
+        "source_key": "dob_now_certificates",
+        "title": "DOB NOW Certificate of Occupancy",
+        "url": "https://data.cityofnewyork.us/resource/pkdm-hqz6.json"
+      },
+      "dob_now_filings": {
+        "complete_extraction": true,
+        "dataset_id": "w9ak-ipjd",
+        "default_where": "upper(job_type) = 'NEW BUILDING'",
+        "max_rows_limit": null,
+        "page_size": 50000,
+        "pagination": "Socrata :id keyset",
+        "raw_file": "dob_now_filings.jsonl",
+        "row_count": 56874,
+        "sha256": "b1e91bfb56975e47da9f6d903572edbcddc5e784c591c0645ceccb0d4eaef0e1",
+        "snapshot_finished_at_utc": "2026-09-29T06:49:13+00:00",
+        "snapshot_started_at_utc": "2026-09-29T06:45:27+00:00",
+        "soql_where": "upper(job_type) = 'NEW BUILDING'",
+        "source_key": "dob_now_filings",
+        "title": "DOB NOW Build Job Application Filings",
+        "url": "https://data.cityofnewyork.us/resource/w9ak-ipjd.json"
+      },
+      "dob_now_permits": {
+        "complete_extraction": true,
+        "dataset_id": "rbx6-tga4",
+        "default_where": "issued_date IS NOT NULL",
+        "max_rows_limit": null,
+        "page_size": 50000,
+        "pagination": "Socrata :id keyset",
+        "raw_file": "dob_now_permits.jsonl",
+        "row_count": 1006100,
+        "sha256": "cd302b4736ec72d6a0fe5412225fea95783ce749ad6f7a112f35bac466f7115d",
+        "snapshot_finished_at_utc": "2026-09-29T06:45:26+00:00",
+        "snapshot_started_at_utc": "2026-09-29T06:18:00+00:00",
+        "soql_where": "issued_date IS NOT NULL",
+        "source_key": "dob_now_permits",
+        "title": "DOB NOW Build Approved Permits",
+        "url": "https://data.cityofnewyork.us/resource/rbx6-tga4.json"
+      },
+      "dob_violations": {
+        "bin_chunk_size": 250,
+        "bin_scope_count": 94910,
+        "bin_scope_sha256": "0b5bc3e4a9096d756651bfb628f74a0ab75227e39f003860972eda8ee852e20b",
+        "complete_extraction": true,
+        "dataset_id": "3h2n-5cm9",
+        "extraction_scope": "all_records_for_cohort_bins",
+        "page_size": 10000,
+        "pagination": "Socrata :id keyset within complete cohort BIN chunks",
+        "raw_file": "dob_violations_cohort.jsonl",
+        "row_count": 273958,
+        "sha256": "994cf87e1a5283e2fe4b42f4bd72a28d649beb44efe567df71015a8dc4981aa6",
+        "snapshot_finished_at_utc": "2026-09-29T13:20:48+00:00",
+        "snapshot_started_at_utc": "2026-09-29T13:10:14+00:00",
+        "soql_where": "bin IN cohort BIN list AND (issue_date IS NOT NULL)",
+        "source_key": "dob_violations",
+        "title": "DOB Violations (BIS)",
+        "url": "https://data.cityofnewyork.us/resource/3h2n-5cm9.json",
+        "where": "issue_date IS NOT NULL"
+      }
+    },
+    "started_at_utc": "2026-09-29T05:57:01+00:00"
+  }
+}

@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -105,7 +106,9 @@ def compute_classification_metrics(*, true_labels: Sequence[float], predicted_la
     }
 
 
-def evaluate_on_test_split(*, dataset_dir: Path, checkpoint_path: Path, agent_id: str) -> dict:
+def evaluate_on_test_split(
+    *, dataset_dir: Path, checkpoint_path: Path, agent_id: str, include_window_predictions: bool = False
+) -> dict:
     torch = _import_torch()
     registry = build_registry([agent_id]) if agent_id else build_default_registry()
     agent = registry.get(agent_id)
@@ -141,6 +144,12 @@ def evaluate_on_test_split(*, dataset_dir: Path, checkpoint_path: Path, agent_id
     if not selected:
         raise SystemExit(f"No test-split windows found for {agent_id} under {dataset_dir}")
 
+    state_by_window: dict[str, str] = {}
+    windows_path = dataset_dir / "agents" / agent_id / "windows.csv"
+    with windows_path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            state_by_window[row["window_id"].strip()] = row["asset_id"].strip().split("_", 1)[0]
+
     tensors = _load_agent_tensors(
         dataset_dir=dataset_dir, agent_id=agent_id, feature_names=feature_names, selected_window_ids=selected
     )
@@ -167,12 +176,22 @@ def evaluate_on_test_split(*, dataset_dir: Path, checkpoint_path: Path, agent_id
         true_labels = label_values[keep].tolist()
         predicted_labels = predicted[keep].tolist()
         probabilities = torch.sigmoid(output["risk_logit"])[keep].tolist()
+        labeled_window_ids = [tensor[2] for tensor, is_labeled in zip(tensors, keep.tolist()) if is_labeled]
 
     metrics = compute_classification_metrics(true_labels=true_labels, predicted_labels=predicted_labels)
     score_summary = score_metrics(true_labels, probabilities, threshold=PREDICTION_THRESHOLD)
+    states = sorted({state_by_window.get(window_id, "unknown") for window_id in labeled_window_ids})
+    metrics_by_state = {
+        state: score_metrics(
+            [label for label, window_id in zip(true_labels, labeled_window_ids) if state_by_window.get(window_id) == state],
+            [score for score, window_id in zip(probabilities, labeled_window_ids) if state_by_window.get(window_id) == state],
+            threshold=PREDICTION_THRESHOLD,
+        )
+        for state in states
+    }
     positive_rate = sum(true_labels) / len(true_labels) if true_labels else None
     majority_baseline = max(positive_rate, 1.0 - positive_rate) if positive_rate is not None else None
-    return {
+    result = {
         "agent_id": agent_id,
         "target_column": target_column,
         "test_windows": len(tensors),
@@ -191,9 +210,25 @@ def evaluate_on_test_split(*, dataset_dir: Path, checkpoint_path: Path, agent_id
         "test_expected_calibration_error_10_equal_frequency_bins": score_summary.get(
             "expected_calibration_error_10_equal_frequency_bins"
         ),
+        "test_calibration_intercept": score_summary.get("calibration_intercept"),
+        "test_calibration_slope": score_summary.get("calibration_slope"),
+        "test_calibration_fit_status": score_summary.get("calibration_fit_status"),
+        "test_calibration_bins": score_summary.get("calibration_bins", []),
         "test_false_alarms_at_threshold": score_summary.get("threshold_metrics", {}).get("false_alarms"),
         "test_inspection_capacity": score_summary.get("inspection_capacity", {}),
+        "test_metrics_by_state": metrics_by_state,
     }
+    if include_window_predictions:
+        result["window_predictions"] = [
+            {
+                "window_id": window_id,
+                "state": state_by_window.get(window_id, "unknown"),
+                "label": int(label),
+                "probability": round(float(probability), 10),
+            }
+            for window_id, label, probability in zip(labeled_window_ids, true_labels, probabilities)
+        ]
+    return result
 
 
 def main() -> None:

@@ -18,7 +18,8 @@ deterioration risk better than baselines, on bridges it has not seen?
 - **Histogram gradient boosting:** bounded tree ensemble, run when
   scikit-learn is installed (`benchmark` extra).
 - **Saved hybrid model:** evaluated with the same metrics when PyTorch is
-  installed.
+  installed. This is the previously saved checkpoint, scored once on the
+  untouched test split.
 
 ## Protocol
 
@@ -29,8 +30,17 @@ deterioration risk better than baselines, on bridges it has not seen?
 - Every input reading must be at or before its window's anchor year. The
   script refuses readings after the anchor year, because they would leak the
   outcome being predicted.
-- A leave-one-state-out analysis fits the additive model on the training
-  windows of the other states and scores every window of the held-out state.
+- The primary comparison evaluates every model on the exact same 8,503 test
+  windows. The primary rows use the saved checkpoint, train-prevalence
+  predictor, last-score logistic model, the additive logistic model using
+  only the three core score histories, and histogram boosting with those same
+  histories. Expanded tabular models are reported separately.
+- Strict leave-one-state-out (LOSO) evaluation removes every window from the
+  held-out state from both training and validation. Tabular models are refit
+  on the remaining states' train rows; the hybrid architecture is retrained
+  from scratch on those rows and early-stopped on remaining-state validation
+  rows. Every window in the held-out state is scored. This is a geographic
+  transfer check, not the same estimand as the untouched random test split.
 - The 836 MB readings file is streamed in one pass and numerical libraries are
   pinned to one thread, so the run fits in a few hundred megabytes of memory.
 
@@ -44,6 +54,14 @@ deterioration risk better than baselines, on bridges it has not seen?
   rates over 10 equal-frequency bins. Tied scores always share a bin, so the
   result does not depend on row order. ECE alone rewards a constant predictor
   that matches the base rate; read it together with PR-AUC and Brier.
+- **Calibration intercept and slope:** logistic recalibration diagnostics on
+  the test labels. Ideal values are 0 and 1. A slope below 1 means predictions
+  are too spread out; a negative intercept shifts calibrated probabilities
+  down around the middle of the score range. The report leaves these values
+  null and records a fit status when scores are constant, labels contain one
+  class, the fit is separated, or the numerical fit is unstable.
+- The report retains the 10 equal-frequency calibration-bin counts, mean
+  predicted probabilities, and observed rates for each model and state.
 - **Recall and false alarms at 0.5**, and **inspection capacity:** recall and
   false alarms when reviewing the highest-risk 5% or 10% of bridges. When the
   cutoff falls inside a block of tied scores, expected values over random tie
@@ -54,25 +72,53 @@ deterioration risk better than baselines, on bridges it has not seen?
 Test split: 8,503 bridges, 25.97% deteriorating within five years
 (training rate 25.20%).
 
-| Model | PR-AUC | Brier | ECE | Recall / false alarms at 0.5 | Top 5%: recall / false alarms | Top 10%: recall / false alarms |
-|---|---:|---:|---:|---:|---:|---:|
-| Train prevalence | 0.260 | 0.192 | 0.008 | 0.0% / 0 | 5.0% / 315 | 10.0% / 630 |
-| Last composite score, logistic | 0.329 | 0.189 | 0.044 | 0.0% / 0 | 10.7% / 190 | 16.7% / 481 |
-| Additive logistic | **0.426** | **0.177** | 0.014 | 11.7% / 186 | 11.5% / 173 | **20.3% / 403** |
+| Model | Input tier | PR-AUC | Brier | ECE | Calibration intercept | Calibration slope |
+|---|---|---:|---:|---:|---:|---:|
+| Train prevalence | constant | 0.260 | 0.1923 | 0.0077 | — | — |
+| Last structural score, logistic | one core score | 0.329 | 0.1887 | 0.0435 | 0.116 | 1.062 |
+| Same-input additive logistic | three core score histories | 0.421 | 0.1779 | 0.0229 | 0.053 | 1.013 |
+| Expanded additive logistic | score histories, bridge age, inspection cadence | 0.426 | 0.1768 | 0.0144 | 0.049 | 1.010 |
+| Same-input histogram boosting | three core score histories | **0.551** | **0.1609** | 0.0152 | 0.147 | 1.117 |
+| Expanded histogram boosting | score histories, bridge age, inspection cadence | **0.556** | **0.1600** | 0.0145 | 0.145 | 1.120 |
+| Saved hybrid checkpoint | three core score histories | 0.532 | 0.1640 | **0.0119** | 0.082 | 1.067 |
 
-The additive model ranks deteriorating bridges clearly better than both
-baselines and has the lowest Brier score. Its ECE is low but not lower than the
-constant prevalence predictor, whose near-zero ECE only reflects that the
-training and test base rates are close. Leave-one-state-out PR-AUC for the
-additive model was 0.443 (California), 0.280 (Iowa), and 0.198
-(Pennsylvania), which is not enough evidence of geographic transfer.
+The hybrid's test PR-AUC is 0.532 and Brier score 0.1640. It improves on the
+earlier additive baseline, but the same-input histogram booster ranks slightly
+higher and has a slightly lower Brier score. The hybrid has the lowest ECE of
+the learned models. Thus this split does not show a single model winning on
+both ranking and calibration. Calibration intercept/slope are diagnostics;
+the calibration-bin values remain in `model_benchmark.json` for inspection.
 
-The saved hybrid model was reported earlier at 19.2% recall with 144 false
-alarms at the same 0.5 threshold, from a separate evaluation. Its PR-AUC,
-Brier score, and capacity metrics require PyTorch and were not produced in this
-run, so the table does not rank it against the others. None of these outputs
-is exposed through the API; a model would first need validated ranking and
-adequate probability calibration.
+## Geographic holdouts
+
+The strict LOSO refit removes the held-out state from all fitting and
+validation. The table compares the hybrid refit with both same-input tabular
+baselines. State codes are FHWA FIPS: `06` California, `19` Iowa, `42`
+Pennsylvania.
+
+| Held-out state | Test windows | Positive rate | Hybrid PR-AUC / Brier | Additive logistic PR-AUC / Brier | Histogram boosting PR-AUC / Brier |
+|---|---:|---:|---:|---:|---:|
+| California (`06`) | 20,852 | 33.87% | 0.356 / 0.2573 | 0.370 / 0.2940 | **0.461 / 0.2268** |
+| Iowa (`19`) | 20,096 | 25.68% | 0.280 / 0.2423 | **0.286** / 0.2072 | 0.284 / **0.1963** |
+| Pennsylvania (`42`) | 15,731 | 13.88% | **0.199** / 0.1431 | 0.200 / 0.1284 | 0.195 / **0.1338** |
+
+Held-out expected calibration error (10 equal-frequency bins) is also mixed:
+
+| Held-out state | Hybrid ECE | Additive logistic ECE | Histogram boosting ECE |
+|---|---:|---:|---:|
+| California (`06`) | 0.1825 | 0.2510 | **0.1102** |
+| Iowa (`19`) | 0.1826 | 0.1244 | **0.0715** |
+| Pennsylvania (`42`) | 0.1550 | **0.0986** | 0.0925 |
+
+The saved checkpoint's unrefit test-window PR-AUC varies by state (0.687,
+0.343, 0.244), and the strict refits show weaker and uneven geographic
+transfer. The holdout rates also differ substantially, so cross-state results
+are not interchangeable. These data support using the hybrid as a candidate,
+not claiming robust cross-state superiority. Full state-level calibration
+bins, ECE, intercept/slope, capacity metrics, and every model are retained in
+the generated report. California's additive-logistic intercept/slope fit is
+ill-conditioned and is marked null with a fit status; its ECE and Brier score
+remain valid direct probability diagnostics.
 
 ## Component condition histories
 
@@ -94,8 +140,12 @@ python3 -m pip install -e ".[benchmark]"
 python3 tools/benchmark_cauren_bridge_models.py \
   --dataset-dir data/cauren_bridge \
   --checkpoint cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt \
-  --output-json data/cauren_bridge/model_benchmark.json
+  --output-json data/cauren_bridge/model_benchmark.json \
+  --output-predictions data/cauren_bridge/model_predictions.csv
 ```
 
-Add `--skip-hybrid` to run without PyTorch. The dataset itself is built with
-`tools/build_cauren_bridge_dataset.py` and is not stored in the repository.
+This default also runs strict LOSO refits. Add `--skip-geographic-holdout` only
+for a quick same-split comparison, or `--skip-hybrid` when PyTorch is
+unavailable. The local dataset and generated report/predictions are not stored
+in the repository; the benchmark code reproduces them from the FHWA source
+bundle.
