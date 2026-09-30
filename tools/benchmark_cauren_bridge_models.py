@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import importlib.metadata
 import json
 import math
 import os
+import platform
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +59,63 @@ CONDITION_FEATURES = (
     "superstructure_condition_risk_score",
     "substructure_condition_risk_score",
 )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _package_version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _reproducibility_metadata(
+    dataset_dir: Path,
+    checkpoint: Path,
+    test_window_ids: list[str],
+) -> dict[str, Any]:
+    agent_dir = dataset_dir / "agents" / "cauren-bridge"
+    input_paths = [
+        dataset_dir / "dataset_summary.json",
+        agent_dir / "windows.csv",
+        agent_dir / "labels.csv",
+        agent_dir / "raw_sensor_readings.csv",
+    ]
+    condition_history = agent_dir / "condition_history.csv"
+    if condition_history.exists():
+        input_paths.append(condition_history)
+    input_hashes = {
+        str(path.relative_to(dataset_dir)): _sha256_file(path)
+        for path in input_paths
+    }
+    fingerprint = hashlib.sha256(
+        "\n".join(f"{name}:{value}" for name, value in sorted(input_hashes.items())).encode("utf-8")
+    ).hexdigest()
+    row_id_text = "\n".join(test_window_ids) + "\n"
+    return {
+        "python_executable": sys.executable,
+        "python_version": platform.python_version(),
+        "package_versions": {
+            "numpy": _package_version("numpy"),
+            "scikit_learn": _package_version("scikit-learn"),
+            "pytorch": _package_version("torch"),
+        },
+        "input_file_sha256": input_hashes,
+        "input_fingerprint_sha256": fingerprint,
+        "checkpoint_path": str(checkpoint),
+        "checkpoint_sha256": _sha256_file(checkpoint) if checkpoint.exists() else None,
+        "model_random_seeds": {"hist_gradient_boosting": 42},
+        "test_window_count": len(test_window_ids),
+        "test_window_ids_sha256": hashlib.sha256(row_id_text.encode("utf-8")).hexdigest(),
+        "test_window_ids": test_window_ids,
+    }
 
 
 @dataclass
@@ -407,6 +467,8 @@ def _fit_hist_gradient_boosting(
     y: np.ndarray,
     train_mask: np.ndarray,
     score_masks: dict[str, np.ndarray],
+    *,
+    include_predictions: bool = False,
 ) -> dict[str, Any]:
     try:
         from sklearn.ensemble import HistGradientBoostingClassifier
@@ -423,7 +485,7 @@ def _fit_hist_gradient_boosting(
     )
     model.fit(x[train_mask], y[train_mask].astype(int))
     predictions = model.predict_proba(x)[:, 1]
-    return {
+    result = {
         "status": "completed",
         "configuration": {
             "learning_rate": 0.06,
@@ -431,15 +493,19 @@ def _fit_hist_gradient_boosting(
             "max_leaf_nodes": 15,
             "min_samples_leaf": 100,
             "l2_regularization": 2.0,
+            "random_state": 42,
         },
         "metrics": {
             split: score_metrics(y[mask].tolist(), predictions[mask].tolist())
             for split, mask in score_masks.items()
         },
     }
+    if include_predictions:
+        result["predictions"] = predictions.tolist()
+    return result
 
 
-def _run_hybrid(dataset_dir: Path, checkpoint: Path) -> dict[str, Any]:
+def _run_hybrid(dataset_dir: Path, checkpoint: Path, *, include_predictions: bool = False) -> dict[str, Any]:
     if not checkpoint.exists():
         return {"status": "skipped", "reason": f"checkpoint not found: {checkpoint}"}
     try:
@@ -449,10 +515,57 @@ def _run_hybrid(dataset_dir: Path, checkpoint: Path) -> dict[str, Any]:
             dataset_dir=dataset_dir,
             checkpoint_path=checkpoint,
             agent_id="cauren-bridge",
+            include_window_predictions=include_predictions,
         )
     except RuntimeError:
         return {"status": "skipped", "reason": "PyTorch is not installed in this Python environment"}
     return {"status": "completed", "metrics": metrics}
+
+
+def _core_history_width(names: list[str], feature_names: tuple[str, ...]) -> int:
+    """Width of the leading per-feature summary block of the matrix.
+
+    The same-input tier slices these columns off the front, which is only
+    valid while _summarize_window emits feature summaries before timing.
+    """
+    width = len(feature_names) * len(FEATURE_SUMMARIES)
+    expected = [f"{feature}__{summary}" for feature in feature_names for summary in FEATURE_SUMMARIES]
+    if names[:width] != expected:
+        raise ValueError("feature matrix does not start with the core feature summaries in schema order")
+    return width
+
+
+def _write_test_predictions(
+    path: Path,
+    window_ids: list[str],
+    metadata: list[dict[str, Any]],
+    y: np.ndarray,
+    test_mask: np.ndarray,
+    prediction_vectors: dict[str, np.ndarray],
+) -> None:
+    """Write one row per (model, test window).
+
+    The saved hybrid is already in prediction_vectors once its window IDs have
+    been checked against the common test set, so it is not written separately.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    test_indices = np.flatnonzero(test_mask)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("window_id", "asset_id", "state", "split", "label", "model", "probability"))
+        for model_name, probabilities in prediction_vectors.items():
+            for index in test_indices:
+                writer.writerow(
+                    (
+                        window_ids[index],
+                        metadata[index]["asset_id"],
+                        metadata[index]["state"],
+                        metadata[index]["split"],
+                        int(y[index]),
+                        model_name,
+                        f"{float(probabilities[index]):.10f}",
+                    )
+                )
 
 
 def main() -> None:
@@ -461,6 +574,14 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=Path("cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt"))
     parser.add_argument("--skip-hybrid", action="store_true", help="Do not make a second streamed pass for the saved neural checkpoint")
     parser.add_argument("--output-json", type=Path, help="Optional path for the complete machine-readable report")
+    parser.add_argument("--output-predictions", type=Path, help="Optional CSV of per-window test probabilities from every completed model")
+    parser.add_argument(
+        "--run-geographic-holdout",
+        action="store_true",
+        help="Also run strict leave-one-state-out refits; retrains the neural hybrid once per state",
+    )
+    parser.add_argument("--bootstrap-replicates", type=int, default=2000, help="Paired bridge-cluster bootstrap draws (minimum 100)")
+    parser.add_argument("--bootstrap-seed", type=int, default=42, help="Random seed for paired bridge-cluster bootstrap draws")
     args = parser.parse_args()
 
     windows, labels = _read_windows(args.dataset_dir)
@@ -477,6 +598,7 @@ def main() -> None:
     train_mask = splits == "train"
     validation_mask = splits == "validation"
     test_mask = splits == "test"
+    test_window_ids = [window_id for index, window_id in enumerate(windows) if test_mask[index]]
     if not train_mask.any() or not test_mask.any():
         raise ValueError("train and test splits must be non-empty")
 
@@ -486,8 +608,13 @@ def main() -> None:
     last_score_model = _fit_logistic(x[train_mask][:, [structural_feature]], y[train_mask])
     last_score_predictions = _predict_logistic(last_score_model, x[:, [structural_feature]])
 
-    score_masks = {"validation": validation_mask, "test": test_mask}
+    state_names = sorted(set(states.tolist()))
+    test_state_masks = {f"test_by_state_{state}": test_mask & (states == state) for state in state_names}
+    score_masks = {"validation": validation_mask, "test": test_mask, **test_state_masks}
     full_logistic_metrics = _fit_and_score_logistic(x, y, train_mask, score_masks)
+    core_history_width = _core_history_width(names, feature_names)
+    same_input_matrix = x[:, :core_history_width]
+    same_input_metrics = _fit_and_score_logistic(same_input_matrix, y, train_mask, score_masks)
     persistence_metrics = {
         split: score_metrics(y[mask].tolist(), last_score_predictions[mask].tolist())
         for split, mask in score_masks.items()
@@ -497,15 +624,146 @@ def main() -> None:
         for split, mask in score_masks.items()
     }
 
-    state_holdouts = {}
-    for state in sorted(set(states.tolist())):
+    state_holdouts: dict[str, Any] = {}
+    for state in state_names:
         state_test = states == state
         state_train = (splits == "train") & ~state_test
         if not state_train.any() or not state_test.any():
             continue
-        state_model = _fit_logistic(x[state_train], y[state_train])
-        state_predictions = _predict_logistic(state_model, x[state_test])
-        state_holdouts[state] = score_metrics(y[state_test].tolist(), state_predictions.tolist())
+        state_score_masks = {"held_out_state": state_test}
+        state_logistic = _fit_logistic(x[state_train], y[state_train])
+        state_logistic_predictions = _predict_logistic(state_logistic, x)
+        state_core_logistic = _fit_logistic(same_input_matrix[state_train], y[state_train])
+        state_core_predictions = _predict_logistic(state_core_logistic, same_input_matrix)
+        state_prior = float(np.mean(y[state_train]))
+        state_predictions = {
+            "train_prevalence": np.full(len(y), state_prior),
+            "last_structural_score_logistic": _predict_logistic(
+                _fit_logistic(x[state_train][:, [structural_feature]], y[state_train]),
+                x[:, [structural_feature]],
+            ),
+            "same_input_additive_logistic": state_core_predictions,
+            "expanded_additive_logistic": state_logistic_predictions,
+        }
+        state_hgb = _fit_hist_gradient_boosting(
+            x, y, state_train, state_score_masks, include_predictions=True
+        )
+        if state_hgb.get("status") == "completed":
+            state_predictions["hist_gradient_boosting"] = np.asarray(
+                state_hgb["predictions"], dtype=np.float64
+            )
+        state_core_hgb = _fit_hist_gradient_boosting(
+            same_input_matrix, y, state_train, state_score_masks, include_predictions=True
+        )
+        if state_core_hgb.get("status") == "completed":
+            state_predictions["same_input_hist_gradient_boosting"] = np.asarray(
+                state_core_hgb["predictions"], dtype=np.float64
+            )
+        state_holdouts[state] = {
+            "train_windows": int(state_train.sum()),
+            "held_out_windows": int(state_test.sum()),
+            "models": {
+                name: score_metrics(y[state_test].tolist(), values[state_test].tolist())
+                for name, values in state_predictions.items()
+            },
+        }
+
+    hgb_results = _fit_hist_gradient_boosting(
+        x, y, train_mask, score_masks, include_predictions=True
+    )
+    same_input_hgb_results = _fit_hist_gradient_boosting(
+        same_input_matrix,
+        y,
+        train_mask,
+        score_masks,
+        include_predictions=True,
+    )
+    hybrid_result = (
+        {"status": "skipped", "reason": "disabled by --skip-hybrid"}
+        if args.skip_hybrid
+        else _run_hybrid(
+            args.dataset_dir,
+            args.checkpoint,
+            include_predictions=True,
+        )
+    )
+    if hybrid_result.get("status") == "completed":
+        hybrid_metrics = hybrid_result.get("metrics", {})
+        observed = int(hybrid_metrics.get("labeled_windows", 0))
+        expected = int(test_mask.sum())
+        if observed != expected:
+            raise ValueError(
+                f"Hybrid scored {observed} labeled test windows, while every baseline scored {expected}; "
+                "refusing a non-aligned comparison"
+            )
+
+    prediction_vectors: dict[str, np.ndarray] = {
+        "train_prevalence": prior_predictions,
+        "last_structural_score_logistic": last_score_predictions,
+        "same_input_additive_logistic": _predict_logistic(
+            _fit_logistic(same_input_matrix[train_mask], y[train_mask]), same_input_matrix
+        ),
+        "expanded_additive_logistic": _predict_logistic(
+            _fit_logistic(x[train_mask], y[train_mask]), x
+        ),
+    }
+    if hgb_results.get("status") == "completed":
+        prediction_vectors["hist_gradient_boosting"] = np.asarray(
+            hgb_results.pop("predictions"), dtype=np.float64
+        )
+    if same_input_hgb_results.get("status") == "completed":
+        prediction_vectors["same_input_hist_gradient_boosting"] = np.asarray(
+            same_input_hgb_results.pop("predictions"), dtype=np.float64
+        )
+    hybrid_window_predictions = hybrid_result.get("metrics", {}).pop("window_predictions", [])
+    uncertainty_result: dict[str, Any] = {
+        "status": "skipped",
+        "reason": "saved hybrid test-window predictions are unavailable",
+    }
+    if hybrid_result.get("status") == "completed":
+        from tools.bridge_cluster_bootstrap import paired_cluster_bootstrap
+
+        hybrid_by_window = {
+            item["window_id"]: float(item["probability"]) for item in hybrid_window_predictions
+        }
+        if len(hybrid_by_window) != len(hybrid_window_predictions) or set(hybrid_by_window) != set(test_window_ids):
+            raise ValueError(
+                "Hybrid prediction window IDs do not exactly match the common test set; "
+                "refusing a non-paired uncertainty analysis"
+            )
+        hybrid_values = np.full(len(windows), np.nan, dtype=np.float64)
+        for index, window_id in enumerate(windows):
+            if test_mask[index]:
+                hybrid_values[index] = hybrid_by_window[window_id]
+        prediction_vectors["saved_hybrid_checkpoint"] = hybrid_values
+        test_prediction_vectors = {
+            name: values[test_mask] for name, values in prediction_vectors.items()
+        }
+        uncertainty_result = paired_cluster_bootstrap(
+            y[test_mask],
+            [metadata[index]["asset_id"] for index in np.flatnonzero(test_mask)],
+            test_prediction_vectors,
+            replicates=args.bootstrap_replicates,
+            seed=args.bootstrap_seed,
+        )
+
+    if args.output_predictions:
+        _write_test_predictions(
+            args.output_predictions, list(windows), metadata, y, test_mask, prediction_vectors
+        )
+
+    if not args.run_geographic_holdout:
+        geographic_holdouts: dict[str, Any] = {
+            "status": "skipped",
+            "reason": "not requested; pass --run-geographic-holdout to retrain per held-out state",
+        }
+    else:
+        from tools.bridge_geographic_holdout import run_geographic_holdouts
+
+        geographic_holdouts = run_geographic_holdouts(
+            dataset_dir=args.dataset_dir,
+            checkpoint_root=args.checkpoint.parent,
+        )
 
     report: dict[str, Any] = {
         "dataset": {
@@ -539,24 +797,36 @@ def main() -> None:
                 "features": ["structural_risk_score__last"],
                 "metrics": persistence_metrics,
             },
+            "same_input_additive_logistic": {
+                "feature_tier": "three_core_features_only",
+                "features": core_history_width,
+                "l2": 0.2,
+                "metrics": same_input_metrics,
+            },
             "additive_logistic_with_time_and_age": {
+                "feature_tier": "expanded_engineered_features",
                 "features": len(names),
                 "l2": 0.2,
                 "metrics": full_logistic_metrics,
             },
-            "hist_gradient_boosting": _fit_hist_gradient_boosting(x, y, train_mask, score_masks),
+            "hist_gradient_boosting": hgb_results,
+            "same_input_hist_gradient_boosting": same_input_hgb_results,
         },
-        "leave_one_state_out_additive_logistic": state_holdouts,
-        "saved_hybrid_checkpoint": (
-            {"status": "skipped", "reason": "disabled by --skip-hybrid"}
-            if args.skip_hybrid
-            else _run_hybrid(args.dataset_dir, args.checkpoint)
+        "leave_one_state_out_tabular_models": state_holdouts,
+        "strict_leave_one_state_out_all_models": geographic_holdouts,
+        "paired_bridge_cluster_bootstrap": uncertainty_result,
+        "reproducibility": _reproducibility_metadata(
+            args.dataset_dir, args.checkpoint, test_window_ids
         ),
+        "saved_hybrid_checkpoint": hybrid_result,
         "protocol": {
             "model_fitting_split": "train only",
             "threshold": 0.5,
             "threshold_tuned_on_test": False,
             "capacity_metrics": ["top_5_percent", "top_10_percent"],
+            "same_input_primary_comparison": "saved hybrid, last-score logistic, and additive logistic use the same three core feature histories",
+            "geographic_test_slices": "saved checkpoint and tabular models are scored on identical test bridges by state",
+            "strict_geographic_holdout": "tabular baselines and the hybrid model are refit after excluding all windows from the held-out state",
             "linear_model": "L2-regularized additive logistic regression fit by Newton iterations",
             "execution": "single process; BLAS/OpenMP thread counts pinned to one",
         },

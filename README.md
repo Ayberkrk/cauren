@@ -34,11 +34,12 @@ raw sensor/CBS/inspection payload
 | Required features | 8 | 3 |
 | Live API today | Yes (default) | Registered, not exposed by default |
 | Trained model | No (statistical fallback only) | Yes, see [Evaluation](#evaluation) |
-| Ground truth used | None available publicly at this scope | Real 5-year deterioration outcome (FHWA) |
+| Ground truth used | Narrow NYC CO administrative outcome in research only; no building-safety label | Real 5-year deterioration outcome (FHWA) |
 
-`cauren-bridge` exists because real, public, per-asset ground truth is
-available for bridges (FHWA inspection history) but not, at this scope,
-for the broader building schema. It is intentionally narrower.
+`cauren-bridge` has a real, public, per-asset deterioration outcome from FHWA
+inspection history. The NYC research cohort adds an administrative CO outcome
+for new-building permits; it does not establish structural condition or safety
+and does not train the broader eight-feature building model.
 
 ### `cauren-civil` feature schema (8 required)
 
@@ -191,11 +192,27 @@ This project is a working research prototype, not a finished product.
 `tools/benchmark_cauren_bridge_models.py` compares the bridge models on the
 same bridge-disjoint splits using PR-AUC, Brier score, calibration error, and
 recall and false alarms when reviewing the highest-risk 5% or 10% of bridges.
-On the local v3 split, an additive logistic model with score history, bridge
-age, and inspection gaps ranked deterioration best (PR-AUC 0.426 versus 0.260
-for the base rate) but did not show reliable transfer across states, so no new
-probability is exposed through the API. Protocol, results, and reproduction
-steps are in [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
+On the local v3 split, the saved hybrid scored PR-AUC 0.532, Brier 0.1640,
+and ECE 0.0119. Same-input histogram boosting scored PR-AUC 0.5506 and Brier
+0.1609. A paired bridge-cluster bootstrap puts the hybrid-minus-booster
+PR-AUC difference at -0.0184 (95% interval -0.0263 to -0.0096) and Brier
+difference at +0.00315 (0.00186 to 0.00433), favoring boosting on this split;
+the hybrid has lower ECE. Strict leave-one-state-out refits showed uneven
+transfer, so no new probability is exposed through the API. Protocol, state
+results, uncertainty intervals, and reproduction steps are in
+[docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
+
+### NYC DOB research dataset
+
+The new-building permit cohort links BIS and DOB NOW permits to both
+certificate feeds, with violation and complaint records restricted to the
+cohort's BINs. The 2026-09-29 snapshot contains 94,910 buildings. In a
+five-year horizon, 14,612 have a qualifying non-temporary CO record and 73,336
+have mature follow-up without one; 6,962 remain censored or ambiguous. This is
+an administrative outcome, not a safety label. The 57-record linkage review,
+historical DOB field versions, and FEMA map vintage checks remain open, so the
+dataset is not ready for model training. See the [NYC dataset method and audit](docs/nyc-civil-dataset.md)
+and the [combined research plan](docs/bridge-and-nyc-research-plan.md).
 
 ## What ships with every diagnosis
 
@@ -268,7 +285,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (125 tests with the minimal dependency set; 140 total once pandas/torch/PyYAML are also installed) |
+| `tests/` | Test suite (130 tests with the minimal dependency set; 149 total once pandas/torch/PyYAML are also installed) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -315,7 +332,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 125 tests, no network/GPU/numpy/torch required (140 total with pandas/torch/PyYAML also installed)
+python3 -m pytest tests/            # 130 tests, no network/GPU/numpy/torch required (149 total with pandas/torch/PyYAML also installed)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

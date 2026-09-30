@@ -48,6 +48,80 @@ def test_capacity_cut_inside_a_tie_reports_expected_captures():
     assert top["false_alarms_expected"] == pytest.approx(0.5)
 
 
+def test_average_precision_matches_scikit_learn_with_ties():
+    sklearn_metrics = pytest.importorskip("sklearn.metrics")
+    rng = random.Random(7)
+    labels = [int(rng.random() < 0.3) for _ in range(400)]
+    # Two-decimal scores force many tied blocks.
+    scores = [round(rng.random(), 2) for _ in labels]
+    expected = sklearn_metrics.average_precision_score(labels, scores)
+    assert score_metrics(labels, scores)["pr_auc_average_precision"] == pytest.approx(expected, abs=1e-6)
+
+
+def test_calibration_fit_recovers_identity_for_calibrated_scores():
+    # Each score block's observed rate equals its score, so the maximum
+    # likelihood fit of label ~ logit(score) is intercept 0 and slope 1.
+    labels = [1] * 2 + [0] * 8 + [1] * 5 + [0] * 5 + [1] * 8 + [0] * 2
+    scores = [0.2] * 10 + [0.5] * 10 + [0.8] * 10
+    result = score_metrics(labels, scores)
+    assert result["calibration_fit_status"] == "fitted"
+    assert result["calibration_intercept"] == pytest.approx(0.0, abs=1e-5)
+    assert result["calibration_slope"] == pytest.approx(1.0, abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("labels", "scores", "status"),
+    [
+        ([1, 1, 1], [0.2, 0.5, 0.9], "not_identifiable_single_class"),
+        ([1, 0, 1], [0.4, 0.4, 0.4], "not_identifiable_constant_scores"),
+        ([0, 0, 1, 1], [0.1, 0.2, 0.8, 0.9], "not_identifiable_perfect_separation"),
+    ],
+)
+def test_calibration_fit_reports_non_identifiable_cases_as_null(labels, scores, status):
+    result = score_metrics(labels, scores)
+    assert result["calibration_fit_status"] == status
+    assert result["calibration_intercept"] is None
+    assert result["calibration_slope"] is None
+
+
+def test_prediction_csv_has_one_row_per_model_and_test_window(tmp_path):
+    np = pytest.importorskip("numpy")
+    from tools.benchmark_cauren_bridge_models import _write_test_predictions
+
+    metadata = [
+        {"asset_id": "CA_1", "state": "CA", "split": "train"},
+        {"asset_id": "CA_2", "state": "CA", "split": "test"},
+        {"asset_id": "IA_1", "state": "IA", "split": "test"},
+    ]
+    test_mask = np.array([False, True, True])
+    hybrid = np.array([np.nan, 0.7, 0.2])
+    output = tmp_path / "predictions.csv"
+    _write_test_predictions(
+        output,
+        ["w0", "w1", "w2"],
+        metadata,
+        np.array([0.0, 1.0, 0.0]),
+        test_mask,
+        {"train_prevalence": np.full(3, 0.3), "saved_hybrid_checkpoint": hybrid},
+    )
+    rows = output.read_text(encoding="utf-8").splitlines()[1:]
+    keys = [(row.split(",")[0], row.split(",")[5]) for row in rows]
+    assert sorted(keys) == sorted(
+        (window, model) for window in ("w1", "w2") for model in ("train_prevalence", "saved_hybrid_checkpoint")
+    )
+
+
+def test_same_input_slice_refuses_a_reordered_feature_matrix():
+    pytest.importorskip("numpy")
+    from tools.benchmark_cauren_bridge_models import FEATURE_SUMMARIES, _core_history_width
+
+    features = ("structural_risk_score", "inspection_finding_score")
+    names = [f"{feature}__{summary}" for feature in features for summary in FEATURE_SUMMARIES]
+    assert _core_history_width(names + ["bridge_age_at_anchor_years"], features) == len(names)
+    with pytest.raises(ValueError, match="core feature summaries"):
+        _core_history_width(["bridge_age_at_anchor_years"] + names, features)
+
+
 def test_non_finite_scores_are_excluded_and_lengths_must_match():
     assert score_metrics([1, 0], [0.9, float("nan")])["labeled_windows"] == 1
     with pytest.raises(ValueError):
