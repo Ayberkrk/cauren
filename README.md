@@ -194,9 +194,12 @@ same bridge-disjoint splits using PR-AUC, Brier score, calibration error, and
 recall and false alarms when reviewing the highest-risk 5% or 10% of bridges.
 On the local v3 split, the saved hybrid scored PR-AUC 0.532, Brier 0.1640,
 and ECE 0.0119. Same-input histogram boosting scored PR-AUC 0.5506 and Brier
-0.1609; strict leave-one-state-out refits showed uneven transfer. This does
-not establish hybrid superiority, so no new probability is exposed through
-the API. Protocol, state results, and reproduction steps are in
+0.1609. A paired bridge-cluster bootstrap puts the hybrid-minus-booster
+PR-AUC difference at -0.0184 (95% interval -0.0263 to -0.0096) and Brier
+difference at +0.00315 (0.00186 to 0.00433), favoring boosting on this split;
+the hybrid has lower ECE. Strict leave-one-state-out refits showed uneven
+transfer, so no new probability is exposed through the API. Protocol, state
+results, uncertainty intervals, and reproduction steps are in
 [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
 
 ### NYC DOB research dataset

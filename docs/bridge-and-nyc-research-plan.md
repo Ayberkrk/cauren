@@ -66,13 +66,15 @@ state-to-state differences.
 
 ### Current result and decision rule
 
-The saved hybrid reaches PR-AUC 0.532 and Brier 0.1640 on the 8,503-row test
-split. Same-input histogram boosting reaches 0.551 and 0.1609; the hybrid has
-the lowest ECE among learned models at 0.0119. Strict state holdouts are mixed.
-This is enough to reject a claim that the hybrid is uniformly better. Retain
-it as a candidate while paired uncertainty intervals and future-state
-validation are completed; do not expose a new calibrated probability through
-the API from this comparison alone.
+The saved hybrid reaches PR-AUC 0.5323 and Brier 0.1640 on the 8,503-row test
+split. Same-input histogram boosting reaches 0.5506 and 0.1609; the hybrid has
+the lowest ECE among learned models at 0.0119. In 2,000 paired bridge-cluster
+bootstrap draws, the hybrid-minus-same-input-boosting difference is -0.0184
+PR-AUC (95% interval [-0.0263, -0.0096]) and +0.00315 Brier (95% interval
+[+0.00186, +0.00433]). Those intervals favor boosting on both metrics for
+this frozen test split. The hybrid remains a candidate because its ECE is
+lower and the geographic holdouts are mixed; neither result supports a new
+API probability or a broad transportability claim.
 
 ## Workstream B: narrow NYC civic data set
 
@@ -170,18 +172,19 @@ but does not replace human link review or source-history validation.
 | Gate | Deliverable | Exit condition |
 |---|---|---|
 | A1 | Frozen bridge benchmark and reproducible predictions | Identical test rows, no split crossing, no post-anchor inputs, all required metrics |
-| A2 | Paired uncertainty analysis | Bridge-clustered intervals for primary model differences; no unsupported winner claim |
+| A2 | Paired uncertainty analysis | **Complete:** paired bridge-cluster intervals for every test model versus the hybrid; conclusions limited to this frozen split |
 | B1 | Versioned NYC raw-source manifest and BIN cohort | All seven source slices complete, hashes verified, cohort scope matches |
 | B2 | Label ledger and linkage queue | Label invariants pass; 57 manual cases reviewed; precision gates pass |
 | B3 | Point-in-time feature audit | Dated events pass; static fields and FEMA vintage either validated or excluded |
 | B4 | Baseline model evaluation | Only after B2 and B3; BIN-grouped, borough-held-out, and temporal test results |
 
-At the 2026-09-29 snapshot, A1 and B1 are complete. A2 remains open for
-paired uncertainty intervals. B2 has a passing structural audit but has not
-passed its human-review gate (0/57 reviewed). B3 has dated-event filters, but
-historical static-field versions, FEMA vintage, and missing-disposition
-semantics remain unverified. B4 has not started because it depends on B2 and
-B3.
+At the 2026-09-30 review of the 2026-09-29 data snapshot, A1, A2, and B1 are
+complete. A2 uses 2,000 paired bootstrap draws, seed 42, and the 8,503 common
+test bridges; its machine-readable output is part of the generated benchmark
+report. B2 has a passing structural audit but has not passed its human-review
+gate (0/57 reviewed). B3 has dated-event filters, but historical static-field
+versions, FEMA vintage, and missing-disposition semantics remain unverified.
+B4 has not started because it depends on B2 and B3.
 
 Do the work in dependency order: A1 and B1 can proceed in parallel; A2
 depends on A1; B2 and B3 depend on B1; B4 depends on both B2 and B3. Keep

@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import importlib.metadata
 import json
 import math
 import os
+import platform
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +59,63 @@ CONDITION_FEATURES = (
     "superstructure_condition_risk_score",
     "substructure_condition_risk_score",
 )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _package_version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _reproducibility_metadata(
+    dataset_dir: Path,
+    checkpoint: Path,
+    test_window_ids: list[str],
+) -> dict[str, Any]:
+    agent_dir = dataset_dir / "agents" / "cauren-bridge"
+    input_paths = [
+        dataset_dir / "dataset_summary.json",
+        agent_dir / "windows.csv",
+        agent_dir / "labels.csv",
+        agent_dir / "raw_sensor_readings.csv",
+    ]
+    condition_history = agent_dir / "condition_history.csv"
+    if condition_history.exists():
+        input_paths.append(condition_history)
+    input_hashes = {
+        str(path.relative_to(dataset_dir)): _sha256_file(path)
+        for path in input_paths
+    }
+    fingerprint = hashlib.sha256(
+        "\n".join(f"{name}:{value}" for name, value in sorted(input_hashes.items())).encode("utf-8")
+    ).hexdigest()
+    row_id_text = "\n".join(test_window_ids) + "\n"
+    return {
+        "python_executable": sys.executable,
+        "python_version": platform.python_version(),
+        "package_versions": {
+            "numpy": _package_version("numpy"),
+            "scikit_learn": _package_version("scikit-learn"),
+            "pytorch": _package_version("torch"),
+        },
+        "input_file_sha256": input_hashes,
+        "input_fingerprint_sha256": fingerprint,
+        "checkpoint_path": str(checkpoint),
+        "checkpoint_sha256": _sha256_file(checkpoint) if checkpoint.exists() else None,
+        "model_random_seeds": {"hist_gradient_boosting": 42},
+        "test_window_count": len(test_window_ids),
+        "test_window_ids_sha256": hashlib.sha256(row_id_text.encode("utf-8")).hexdigest(),
+        "test_window_ids": test_window_ids,
+    }
 
 
 @dataclass
@@ -433,6 +493,7 @@ def _fit_hist_gradient_boosting(
             "max_leaf_nodes": 15,
             "min_samples_leaf": 100,
             "l2_regularization": 2.0,
+            "random_state": 42,
         },
         "metrics": {
             split: score_metrics(y[mask].tolist(), predictions[mask].tolist())
@@ -469,6 +530,8 @@ def main() -> None:
     parser.add_argument("--output-json", type=Path, help="Optional path for the complete machine-readable report")
     parser.add_argument("--output-predictions", type=Path, help="Optional CSV of per-window test probabilities from every completed model")
     parser.add_argument("--skip-geographic-holdout", action="store_true", help="Skip strict leave-one-state-out refits")
+    parser.add_argument("--bootstrap-replicates", type=int, default=2000, help="Paired bridge-cluster bootstrap draws (minimum 100)")
+    parser.add_argument("--bootstrap-seed", type=int, default=42, help="Random seed for paired bridge-cluster bootstrap draws")
     args = parser.parse_args()
 
     windows, labels = _read_windows(args.dataset_dir)
@@ -485,6 +548,7 @@ def main() -> None:
     train_mask = splits == "train"
     validation_mask = splits == "validation"
     test_mask = splits == "test"
+    test_window_ids = [window_id for index, window_id in enumerate(windows) if test_mask[index]]
     if not train_mask.any() or not test_mask.any():
         raise ValueError("train and test splits must be non-empty")
 
@@ -555,14 +619,14 @@ def main() -> None:
         }
 
     hgb_results = _fit_hist_gradient_boosting(
-        x, y, train_mask, score_masks, include_predictions=bool(args.output_predictions)
+        x, y, train_mask, score_masks, include_predictions=True
     )
     same_input_hgb_results = _fit_hist_gradient_boosting(
         same_input_matrix,
         y,
         train_mask,
         score_masks,
-        include_predictions=bool(args.output_predictions),
+        include_predictions=True,
     )
     hybrid_result = (
         {"status": "skipped", "reason": "disabled by --skip-hybrid"}
@@ -570,7 +634,7 @@ def main() -> None:
         else _run_hybrid(
             args.dataset_dir,
             args.checkpoint,
-            include_predictions=bool(args.output_predictions),
+            include_predictions=True,
         )
     )
     if hybrid_result.get("status") == "completed":
@@ -583,27 +647,63 @@ def main() -> None:
                 "refusing a non-aligned comparison"
             )
 
+    prediction_vectors: dict[str, np.ndarray] = {
+        "train_prevalence": prior_predictions,
+        "last_structural_score_logistic": last_score_predictions,
+        "same_input_additive_logistic": _predict_logistic(
+            _fit_logistic(same_input_matrix[train_mask], y[train_mask]), same_input_matrix
+        ),
+        "expanded_additive_logistic": _predict_logistic(
+            _fit_logistic(x[train_mask], y[train_mask]), x
+        ),
+    }
+    if hgb_results.get("status") == "completed":
+        prediction_vectors["hist_gradient_boosting"] = np.asarray(
+            hgb_results.pop("predictions"), dtype=np.float64
+        )
+    if same_input_hgb_results.get("status") == "completed":
+        prediction_vectors["same_input_hist_gradient_boosting"] = np.asarray(
+            same_input_hgb_results.pop("predictions"), dtype=np.float64
+        )
+    hybrid_window_predictions = hybrid_result.get("metrics", {}).pop("window_predictions", [])
+    uncertainty_result: dict[str, Any] = {
+        "status": "skipped",
+        "reason": "saved hybrid test-window predictions are unavailable",
+    }
+    if hybrid_result.get("status") == "completed":
+        from tools.bridge_cluster_bootstrap import paired_cluster_bootstrap
+
+        hybrid_by_window = {
+            item["window_id"]: float(item["probability"]) for item in hybrid_window_predictions
+        }
+        if len(hybrid_by_window) != len(hybrid_window_predictions) or set(hybrid_by_window) != set(test_window_ids):
+            raise ValueError(
+                "Hybrid prediction window IDs do not exactly match the common test set; "
+                "refusing a non-paired uncertainty analysis"
+            )
+        hybrid_values = np.full(len(windows), np.nan, dtype=np.float64)
+        for index, window_id in enumerate(windows):
+            if test_mask[index]:
+                hybrid_values[index] = hybrid_by_window[window_id]
+        prediction_vectors["saved_hybrid_checkpoint"] = hybrid_values
+        test_prediction_vectors = {
+            name: values[test_mask] for name, values in prediction_vectors.items()
+        }
+        uncertainty_result = paired_cluster_bootstrap(
+            y[test_mask],
+            [metadata[index]["asset_id"] for index in np.flatnonzero(test_mask)],
+            test_prediction_vectors,
+            replicates=args.bootstrap_replicates,
+            seed=args.bootstrap_seed,
+        )
+
     if args.output_predictions:
         test_ids = list(windows)
-        export_predictions: dict[str, list[float]] = {
-            "train_prevalence": prior_predictions,
-            "last_structural_score_logistic": last_score_predictions,
-            "same_input_additive_logistic": _predict_logistic(
-                _fit_logistic(same_input_matrix[train_mask], y[train_mask]), same_input_matrix
-            ),
-            "expanded_additive_logistic": _predict_logistic(
-                _fit_logistic(x[train_mask], y[train_mask]), x
-            ),
-        }
-        if hgb_results.get("status") == "completed":
-            export_predictions["hist_gradient_boosting"] = hgb_results.pop("predictions")
-        if same_input_hgb_results.get("status") == "completed":
-            export_predictions["same_input_hist_gradient_boosting"] = same_input_hgb_results.pop("predictions")
         args.output_predictions.parent.mkdir(parents=True, exist_ok=True)
         with args.output_predictions.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(("window_id", "asset_id", "state", "split", "label", "model", "probability"))
-            for model_name, probabilities in export_predictions.items():
+            for model_name, probabilities in prediction_vectors.items():
                 for index, window_id in enumerate(test_ids):
                     if test_mask[index]:
                         writer.writerow(
@@ -617,8 +717,7 @@ def main() -> None:
                                 f"{float(probabilities[index]):.10f}",
                             )
                         )
-            hybrid_predictions = hybrid_result.get("metrics", {}).pop("window_predictions", [])
-            for prediction in hybrid_predictions:
+            for prediction in hybrid_window_predictions:
                 window_id = prediction["window_id"]
                 window = windows[window_id]
                 writer.writerow(
@@ -695,6 +794,10 @@ def main() -> None:
         },
         "leave_one_state_out_additive_logistic": state_holdouts,
         "strict_leave_one_state_out_all_models": geographic_holdouts,
+        "paired_bridge_cluster_bootstrap": uncertainty_result,
+        "reproducibility": _reproducibility_metadata(
+            args.dataset_dir, args.checkpoint, test_window_ids
+        ),
         "saved_hybrid_checkpoint": hybrid_result,
         "protocol": {
             "model_fitting_split": "train only",

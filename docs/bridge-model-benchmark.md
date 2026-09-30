@@ -83,11 +83,41 @@ Test split: 8,503 bridges, 25.97% deteriorating within five years
 | Saved hybrid checkpoint | three core score histories | 0.532 | 0.1640 | **0.0119** | 0.082 | 1.067 |
 
 The hybrid's test PR-AUC is 0.532 and Brier score 0.1640. It improves on the
-earlier additive baseline, but the same-input histogram booster ranks slightly
-higher and has a slightly lower Brier score. The hybrid has the lowest ECE of
-the learned models. Thus this split does not show a single model winning on
-both ranking and calibration. Calibration intercept/slope are diagnostics;
-the calibration-bin values remain in `model_benchmark.json` for inspection.
+additive baselines, while both histogram boosters score higher on PR-AUC and
+lower on Brier. The hybrid has the lowest ECE among learned models.
+Calibration intercept/slope are diagnostics; the calibration-bin values
+remain in `model_benchmark.json` for inspection.
+
+## Paired bridge-cluster uncertainty
+
+The benchmark resamples the 8,503 test bridges 2,000 times with replacement
+(seed 42). Every model uses the same sampled bridge IDs in each replicate.
+Intervals are percentile 95% intervals. The saved checkpoint and predictions
+are held fixed, so these intervals describe test-bridge sampling uncertainty;
+they do not include training-seed, checkpoint-selection, or source-data
+uncertainty. The current test split has one window per bridge, but the code
+resamples by `asset_id` so additional windows for a bridge stay together.
+Intervals are descriptive and unadjusted for multiple comparisons.
+
+The table reports each paired difference as **hybrid minus comparator**.
+Positive PR-AUC favors the hybrid. Negative Brier favors the hybrid.
+
+| Comparator | Δ PR-AUC (95% interval) | Δ Brier (95% interval) |
+|---|---:|---:|
+| Train prevalence | +0.273 [+0.255, +0.291] | -0.0283 [-0.0312, -0.0256] |
+| Last structural score, logistic | +0.204 [+0.188, +0.220] | -0.0247 [-0.0272, -0.0222] |
+| Same-input additive logistic | +0.111 [+0.095, +0.126] | -0.0139 [-0.0160, -0.0118] |
+| Expanded additive logistic | +0.106 [+0.090, +0.122] | -0.0128 [-0.0148, -0.0108] |
+| Same-input histogram boosting | -0.018 [-0.026, -0.010] | +0.0032 [+0.0019, +0.0043] |
+| Expanded histogram boosting | -0.024 [-0.032, -0.015] | +0.0040 [+0.0028, +0.0053] |
+
+On this fixed split, paired intervals favor the hybrid over the logistic
+baselines and favor histogram boosting over the hybrid on both PR-AUC and
+Brier. This is evidence about these test bridges and frozen predictions, not
+generalization to new states or new training runs. The machine-readable
+intervals for each model and each paired difference are in
+`model_benchmark.json`. That report also records the exact test window IDs,
+input and checkpoint SHA-256 hashes, package versions, and model random seeds.
 
 ## Geographic holdouts
 
@@ -136,12 +166,14 @@ as ratings.
 ## Reproduce
 
 ```bash
-python3 -m pip install -e ".[benchmark]"
-python3 tools/benchmark_cauren_bridge_models.py \
+python3.11 -m pip install -e ".[benchmark]"
+python3.11 tools/benchmark_cauren_bridge_models.py \
   --dataset-dir data/cauren_bridge \
   --checkpoint cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt \
   --output-json data/cauren_bridge/model_benchmark.json \
-  --output-predictions data/cauren_bridge/model_predictions.csv
+  --output-predictions data/cauren_bridge/model_predictions.csv \
+  --bootstrap-replicates 2000 \
+  --bootstrap-seed 42
 ```
 
 This default also runs strict LOSO refits. Add `--skip-geographic-holdout` only
