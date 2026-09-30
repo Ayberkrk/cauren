@@ -522,6 +522,52 @@ def _run_hybrid(dataset_dir: Path, checkpoint: Path, *, include_predictions: boo
     return {"status": "completed", "metrics": metrics}
 
 
+def _core_history_width(names: list[str], feature_names: tuple[str, ...]) -> int:
+    """Width of the leading per-feature summary block of the matrix.
+
+    The same-input tier slices these columns off the front, which is only
+    valid while _summarize_window emits feature summaries before timing.
+    """
+    width = len(feature_names) * len(FEATURE_SUMMARIES)
+    expected = [f"{feature}__{summary}" for feature in feature_names for summary in FEATURE_SUMMARIES]
+    if names[:width] != expected:
+        raise ValueError("feature matrix does not start with the core feature summaries in schema order")
+    return width
+
+
+def _write_test_predictions(
+    path: Path,
+    window_ids: list[str],
+    metadata: list[dict[str, Any]],
+    y: np.ndarray,
+    test_mask: np.ndarray,
+    prediction_vectors: dict[str, np.ndarray],
+) -> None:
+    """Write one row per (model, test window).
+
+    The saved hybrid is already in prediction_vectors once its window IDs have
+    been checked against the common test set, so it is not written separately.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    test_indices = np.flatnonzero(test_mask)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("window_id", "asset_id", "state", "split", "label", "model", "probability"))
+        for model_name, probabilities in prediction_vectors.items():
+            for index in test_indices:
+                writer.writerow(
+                    (
+                        window_ids[index],
+                        metadata[index]["asset_id"],
+                        metadata[index]["state"],
+                        metadata[index]["split"],
+                        int(y[index]),
+                        model_name,
+                        f"{float(probabilities[index]):.10f}",
+                    )
+                )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset-dir", type=Path, default=Path("data/cauren_bridge"))
@@ -529,7 +575,11 @@ def main() -> None:
     parser.add_argument("--skip-hybrid", action="store_true", help="Do not make a second streamed pass for the saved neural checkpoint")
     parser.add_argument("--output-json", type=Path, help="Optional path for the complete machine-readable report")
     parser.add_argument("--output-predictions", type=Path, help="Optional CSV of per-window test probabilities from every completed model")
-    parser.add_argument("--skip-geographic-holdout", action="store_true", help="Skip strict leave-one-state-out refits")
+    parser.add_argument(
+        "--run-geographic-holdout",
+        action="store_true",
+        help="Also run strict leave-one-state-out refits; retrains the neural hybrid once per state",
+    )
     parser.add_argument("--bootstrap-replicates", type=int, default=2000, help="Paired bridge-cluster bootstrap draws (minimum 100)")
     parser.add_argument("--bootstrap-seed", type=int, default=42, help="Random seed for paired bridge-cluster bootstrap draws")
     args = parser.parse_args()
@@ -562,7 +612,7 @@ def main() -> None:
     test_state_masks = {f"test_by_state_{state}": test_mask & (states == state) for state in state_names}
     score_masks = {"validation": validation_mask, "test": test_mask, **test_state_masks}
     full_logistic_metrics = _fit_and_score_logistic(x, y, train_mask, score_masks)
-    core_history_width = len(feature_names) * len(FEATURE_SUMMARIES)
+    core_history_width = _core_history_width(names, feature_names)
     same_input_matrix = x[:, :core_history_width]
     same_input_metrics = _fit_and_score_logistic(same_input_matrix, y, train_mask, score_masks)
     persistence_metrics = {
@@ -698,44 +748,14 @@ def main() -> None:
         )
 
     if args.output_predictions:
-        test_ids = list(windows)
-        args.output_predictions.parent.mkdir(parents=True, exist_ok=True)
-        with args.output_predictions.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(("window_id", "asset_id", "state", "split", "label", "model", "probability"))
-            for model_name, probabilities in prediction_vectors.items():
-                for index, window_id in enumerate(test_ids):
-                    if test_mask[index]:
-                        writer.writerow(
-                            (
-                                window_id,
-                                metadata[index]["asset_id"],
-                                states[index],
-                                splits[index],
-                                int(y[index]),
-                                model_name,
-                                f"{float(probabilities[index]):.10f}",
-                            )
-                        )
-            for prediction in hybrid_window_predictions:
-                window_id = prediction["window_id"]
-                window = windows[window_id]
-                writer.writerow(
-                    (
-                        window_id,
-                        window["asset_id"],
-                        prediction["state"],
-                        "test",
-                        prediction["label"],
-                        "saved_hybrid_checkpoint",
-                        f"{prediction['probability']:.10f}",
-                    )
-                )
+        _write_test_predictions(
+            args.output_predictions, list(windows), metadata, y, test_mask, prediction_vectors
+        )
 
-    if args.skip_geographic_holdout:
+    if not args.run_geographic_holdout:
         geographic_holdouts: dict[str, Any] = {
             "status": "skipped",
-            "reason": "disabled by --skip-geographic-holdout",
+            "reason": "not requested; pass --run-geographic-holdout to retrain per held-out state",
         }
     else:
         from tools.bridge_geographic_holdout import run_geographic_holdouts
@@ -792,7 +812,7 @@ def main() -> None:
             "hist_gradient_boosting": hgb_results,
             "same_input_hist_gradient_boosting": same_input_hgb_results,
         },
-        "leave_one_state_out_additive_logistic": state_holdouts,
+        "leave_one_state_out_tabular_models": state_holdouts,
         "strict_leave_one_state_out_all_models": geographic_holdouts,
         "paired_bridge_cluster_bootstrap": uncertainty_result,
         "reproducibility": _reproducibility_metadata(

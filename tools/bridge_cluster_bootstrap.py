@@ -8,9 +8,7 @@ from typing import Any
 import numpy as np
 
 
-def _prepare_average_precision(
-    labels: np.ndarray, scores: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, int]:
+def _prepare_average_precision(scores: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
     order = np.argsort(-scores, kind="mergesort")
     sorted_scores = scores[order]
     group_starts = np.r_[0, np.flatnonzero(sorted_scores[1:] != sorted_scores[:-1]) + 1]
@@ -89,7 +87,7 @@ def paired_cluster_bootstrap(
         if not np.isfinite(scores).all() or ((scores < 0.0) | (scores > 1.0)).any():
             raise ValueError(f"predictions for {name!r} must be finite probabilities")
         score_arrays[name] = scores
-        prepared[name] = _prepare_average_precision(y, scores)
+        prepared[name] = _prepare_average_precision(scores)
 
     unique_clusters, cluster_inverse = np.unique(clusters, return_inverse=True)
     if len(unique_clusters) < 2:

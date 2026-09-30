@@ -173,11 +173,12 @@ python3.11 tools/benchmark_cauren_bridge_models.py \
   --output-json data/cauren_bridge/model_benchmark.json \
   --output-predictions data/cauren_bridge/model_predictions.csv \
   --bootstrap-replicates 2000 \
-  --bootstrap-seed 42
+  --bootstrap-seed 42 \
+  --run-geographic-holdout
 ```
 
-This default also runs strict LOSO refits. Add `--skip-geographic-holdout` only
-for a quick same-split comparison, or `--skip-hybrid` when PyTorch is
-unavailable. The local dataset and generated report/predictions are not stored
+`--run-geographic-holdout` adds the strict LOSO refits reported above, which
+retrain the neural hybrid once per state; leave it off for a quick same-split
+comparison. Add `--skip-hybrid` when PyTorch is unavailable. The local dataset and generated report/predictions are not stored
 in the repository; the benchmark code reproduces them from the FHWA source
 bundle.

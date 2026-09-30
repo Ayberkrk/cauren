@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 
 from tools.benchmark_cauren_bridge_models import (
-    FEATURE_SUMMARIES,
+    _core_history_width,
     _fit_hist_gradient_boosting,
     _fit_logistic,
     _load_condition_history,
@@ -84,7 +84,7 @@ def run_geographic_holdouts(
     splits = np.asarray([row["split"] for row in metadata])
     states = np.asarray([row["state"] for row in metadata])
     structural_column = names.index("structural_risk_score__last")
-    core_width = len(feature_names) * len(FEATURE_SUMMARIES)
+    core_width = _core_history_width(names, feature_names)
     core_x = x[:, :core_width]
     fold_reports: dict[str, Any] = {}
 
