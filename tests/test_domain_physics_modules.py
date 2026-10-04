@@ -51,3 +51,65 @@ def test_civil_agent_folds_in_oma_frequency_drift_evidence():
     assert relation["max_drop_pct"] == 12.0
     assert relation["severity"] == "alarm"
     assert evidence.agent_outputs["subsystem_scores"]["structural_reliability"] > 0.0
+
+
+def _civil_evidence(values: dict[str, float]):
+    agent = build_civil_agent()
+    readings, rejected = parse_sensor_readings(
+        [
+            {
+                "sensor_id": name,
+                "name": name,
+                "unit": "%" if name.endswith("_pct") else "ratio",
+                "value": value,
+                "timestamp": 1.0,
+            }
+            for name, value in values.items()
+        ]
+    )
+    assert not rejected
+    window = AgentSchemaAdapter(agent.schema).build_window(readings, inherited_rejections=rejected)
+    return agent.physics.evaluate(window=window, schema=agent.schema, context={})
+
+
+def test_civil_zero_risk_full_relation_is_not_overridden_by_partial_fallback():
+    evidence = _civil_evidence(
+        {
+            "structural_risk_score": 0.0,
+            "inspection_finding_score": 0.0,
+            "permit_status_score": 1.0,
+            "construction_progress_pct": 100.0,
+            "infrastructure_connection_score": 1.0,
+            "natural_hazard_score": 0.0,
+            "occupancy_safety_score": 0.0,
+            "ground_stability_score": 0.0,
+        }
+    )
+
+    assert evidence.risk_contribution == 0.0
+    assert set(evidence.agent_outputs["subsystem_scores"].values()) == {0.0}
+    assert not [item["name"] for item in evidence.relations if item.get("partial_evidence")]
+
+
+def test_civil_lone_readiness_indicator_is_not_scored_as_risk():
+    for values in (
+        {"permit_status_score": 1.0},
+        {"infrastructure_connection_score": 1.0},
+        {"construction_progress_pct": 100.0},
+        {"permit_status_score": 1.0, "infrastructure_connection_score": 1.0},
+    ):
+        evidence = _civil_evidence(values)
+        assert evidence.agent_outputs["subsystem_scores"]["construction_readiness"] == 0.0, values
+
+
+def test_civil_partial_readiness_follows_the_progress_gap_direction():
+    ahead = _civil_evidence({"construction_progress_pct": 90.0, "permit_status_score": 0.2})
+    ready = _civil_evidence({"construction_progress_pct": 90.0, "permit_status_score": 1.0})
+
+    relation = next(
+        item for item in ahead.relations if item["name"] == "construction_readiness_partial_evidence"
+    )
+    assert relation["partial_evidence"] is True
+    # Dampened to half of the full relation's saturated score.
+    assert ahead.agent_outputs["subsystem_scores"]["construction_readiness"] == 0.5
+    assert ready.agent_outputs["subsystem_scores"]["construction_readiness"] == 0.0

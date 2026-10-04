@@ -71,6 +71,16 @@ class CivilPhysics(DomainPhysics):
             "occupancy_and_review": 0.0,
         }
 
+        # Each subsystem's full relation needs its *whole* feature pair/triple,
+        # so a real request that only supplies some of the 8 scores (the
+        # common case -- most callers won't have all of them) would get
+        # exactly zero physics signal even when the features it does have are
+        # informative on their own. The elif branches fall back to a dampened
+        # reading in that case, so partial-but-real evidence isn't discarded
+        # outright. Dampened (0.5x) and explicitly flagged as partial so it
+        # can never out-rank a fully-corroborated relation. A fallback only
+        # runs when its full relation could not: a full relation that scored
+        # 0.0 is a real "no risk" result, not missing evidence.
         if structural_risk is not None and ground_stability is not None:
             score = min(1.0, 0.6 * float(structural_risk) + 0.4 * float(ground_stability))
             subsystem_scores["structural_reliability"] = score
@@ -83,12 +93,34 @@ class CivilPhysics(DomainPhysics):
                     ground_stability_score=round(float(ground_stability), 6),
                 )
             )
+        elif structural_risk is not None or ground_stability is not None:
+            solo = structural_risk if structural_risk is not None else ground_stability
+            solo_name = "structural_risk_score" if structural_risk is not None else "ground_stability_score"
+            score = 0.5 * float(solo)
+            subsystem_scores["structural_reliability"] = score
+            relations.append(
+                build_relation(
+                    "structural_partial_evidence",
+                    score,
+                    "Yapisal guvenilirlik icin sadece tek bir gosterge mevcut; zayif kanit olarak dampen edilmis skor kullanildi.",
+                    partial_evidence=True,
+                    **{solo_name: round(float(solo), 6)},
+                )
+            )
 
+        readiness_scores = {
+            name: float(value)
+            for name, value in {
+                "permit_status_score": permit_score,
+                "infrastructure_connection_score": infrastructure_score,
+            }.items()
+            if value is not None
+        }
         if permit_score is not None and progress_pct is not None and infrastructure_score is not None:
             normalized_progress = max(0.0, min(1.0, float(progress_pct) / 100.0))
             delay_gap = max(0.0, normalized_progress - min(float(permit_score), float(infrastructure_score)))
             score = min(1.0, delay_gap / 0.35)
-            subsystem_scores["construction_readiness"] = max(subsystem_scores["construction_readiness"], score)
+            subsystem_scores["construction_readiness"] = score
             relations.append(
                 build_relation(
                     "construction_readiness_gap",
@@ -97,6 +129,25 @@ class CivilPhysics(DomainPhysics):
                     normalized_progress=round(normalized_progress, 6),
                     permit_status_score=round(float(permit_score), 6),
                     infrastructure_connection_score=round(float(infrastructure_score), 6),
+                )
+            )
+        elif progress_pct is not None and readiness_scores:
+            # Same progress-ahead-of-readiness gap as the full relation, read
+            # against the one readiness indicator that is present. Progress
+            # alone, or permit/infrastructure without progress, says nothing
+            # about a gap, so those leave the subsystem at zero.
+            normalized_progress = max(0.0, min(1.0, float(progress_pct) / 100.0))
+            delay_gap = max(0.0, normalized_progress - min(readiness_scores.values()))
+            score = 0.5 * min(1.0, delay_gap / 0.35)
+            subsystem_scores["construction_readiness"] = score
+            relations.append(
+                build_relation(
+                    "construction_readiness_partial_evidence",
+                    score,
+                    "Insaat hazirligi icin izin/ilerleme/altyapi uclusunun tamami yok; mevcut gostergelerle zayif kanit uretildi.",
+                    partial_evidence=True,
+                    normalized_progress=round(normalized_progress, 6),
+                    **{name: round(value, 6) for name, value in readiness_scores.items()},
                 )
             )
 
@@ -112,6 +163,18 @@ class CivilPhysics(DomainPhysics):
                     structural_risk_score=round(float(structural_risk), 6),
                 )
             )
+        elif natural_hazard is not None:
+            score = 0.5 * float(natural_hazard)
+            subsystem_scores["hazard_exposure"] = score
+            relations.append(
+                build_relation(
+                    "hazard_partial_evidence",
+                    score,
+                    "Yapisal risk baglami olmadan dogal tehlike maruziyeti tek basina zayif kanit olarak degerlendirildi.",
+                    partial_evidence=True,
+                    natural_hazard_score=round(float(natural_hazard), 6),
+                )
+            )
 
         if inspection_score is not None and occupancy_safety is not None:
             score = min(1.0, 0.5 * float(inspection_score) + 0.5 * float(occupancy_safety))
@@ -125,80 +188,20 @@ class CivilPhysics(DomainPhysics):
                     occupancy_safety_score=round(float(occupancy_safety), 6),
                 )
             )
-
-        # Every relation above needs its *whole* feature pair/triple to
-        # fire, so a real request that only supplies some of the 8 scores
-        # (the common case -- most callers won't have all of them) gets
-        # exactly zero physics signal even when the features it does have
-        # are informative on their own. Fall back to a dampened
-        # single-feature reading for any subsystem that a full relation
-        # didn't already cover, so partial-but-real evidence isn't
-        # discarded outright. Dampened (0.5x) and explicitly flagged as
-        # partial so it can never out-rank a fully-corroborated relation.
-        if subsystem_scores["structural_reliability"] == 0.0:
-            solo = structural_risk if structural_risk is not None else ground_stability
-            solo_name = "structural_risk_score" if structural_risk is not None else "ground_stability_score"
-            if solo is not None:
-                score = 0.5 * float(solo)
-                subsystem_scores["structural_reliability"] = score
-                relations.append(
-                    build_relation(
-                        "structural_partial_evidence",
-                        score,
-                        "Yapisal guvenilirlik icin sadece tek bir gosterge mevcut; zayif kanit olarak dampen edilmis skor kullanildi.",
-                        partial_evidence=True,
-                        **{solo_name: round(float(solo), 6)},
-                    )
-                )
-
-        if subsystem_scores["construction_readiness"] == 0.0:
-            available = {
-                "permit_status_score": permit_score,
-                "construction_progress_pct": (progress_pct / 100.0) if progress_pct is not None else None,
-                "infrastructure_connection_score": infrastructure_score,
-            }
-            present = {name: value for name, value in available.items() if value is not None}
-            if present:
-                score = 0.5 * (sum(present.values()) / float(len(present)))
-                subsystem_scores["construction_readiness"] = score
-                relations.append(
-                    build_relation(
-                        "construction_readiness_partial_evidence",
-                        score,
-                        "Insaat hazirligi icin izin/ilerleme/altyapi uclusunun tamami yok; mevcut gostergelerle zayif kanit uretildi.",
-                        partial_evidence=True,
-                        **{name: round(float(value), 6) for name, value in present.items()},
-                    )
-                )
-
-        if subsystem_scores["hazard_exposure"] == 0.0 and natural_hazard is not None:
-            score = 0.5 * float(natural_hazard)
-            subsystem_scores["hazard_exposure"] = score
-            relations.append(
-                build_relation(
-                    "hazard_partial_evidence",
-                    score,
-                    "Yapisal risk baglami olmadan dogal tehlike maruziyeti tek basina zayif kanit olarak degerlendirildi.",
-                    partial_evidence=True,
-                    natural_hazard_score=round(float(natural_hazard), 6),
-                )
-            )
-
-        if subsystem_scores["occupancy_and_review"] == 0.0:
+        elif inspection_score is not None or occupancy_safety is not None:
             solo = inspection_score if inspection_score is not None else occupancy_safety
             solo_name = "inspection_finding_score" if inspection_score is not None else "occupancy_safety_score"
-            if solo is not None:
-                score = 0.5 * float(solo)
-                subsystem_scores["occupancy_and_review"] = score
-                relations.append(
-                    build_relation(
-                        "occupancy_review_partial_evidence",
-                        score,
-                        "Inceleme-kullanim guvenligi icin sadece tek bir gosterge mevcut; zayif kanit olarak dampen edilmis skor kullanildi.",
-                        partial_evidence=True,
-                        **{solo_name: round(float(solo), 6)},
-                    )
+            score = 0.5 * float(solo)
+            subsystem_scores["occupancy_and_review"] = score
+            relations.append(
+                build_relation(
+                    "occupancy_review_partial_evidence",
+                    score,
+                    "Inceleme-kullanim guvenligi icin sadece tek bir gosterge mevcut; zayif kanit olarak dampen edilmis skor kullanildi.",
+                    partial_evidence=True,
+                    **{solo_name: round(float(solo), 6)},
                 )
+            )
 
         quality = measurement_quality_penalty(window)
         if quality is not None:
