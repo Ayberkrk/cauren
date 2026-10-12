@@ -98,3 +98,8 @@ Reach out to a maintainer directly instead. Note that `api/app.py`
 ships with no authentication by design (see README's API section) --
 that is a documented design choice for a research prototype, not
 something to report as a bug on its own.
+
+## Code of conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By
+taking part, you agree to uphold it.
