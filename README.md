@@ -2,6 +2,7 @@
 
 [![Tests](https://github.com/Ayberkrk/cauren/actions/workflows/tests.yml/badge.svg)](https://github.com/Ayberkrk/cauren/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![good first issues](https://img.shields.io/github/issues/Ayberkrk/cauren/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/Ayberkrk/cauren/labels/good%20first%20issue)
 
 Cauren is a civil-engineering diagnostics and decision-support system.
 It ingests sensor/CBS ("bina/insaat" GIS) readings or bridge inspection
