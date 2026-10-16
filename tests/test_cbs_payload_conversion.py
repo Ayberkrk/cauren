@@ -90,6 +90,13 @@ def test_score_from_mapping_falls_back_on_unparseable_value():
     assert _score_from_mapping({"score": "not-a-number"}, ("score",), 0.33) == 0.33
 
 
+def test_score_from_mapping_skips_non_finite_values():
+    # max(0, min(1, nan)) is 1.0, so a NaN must not be read as maximum risk.
+    assert _score_from_mapping({"score": "nan"}, ("score",), 0.33) == 0.33
+    assert _score_from_mapping({"score": float("inf")}, ("score",), 0.33) == 0.33
+    assert _score_from_mapping({"a": float("nan"), "b": 0.4}, ("a", "b"), 0.33) == 0.4
+
+
 def test_inspection_score_picks_max_across_items_and_key_aliases():
     items = [
         {"finding_score": 0.2},
@@ -261,3 +268,18 @@ def test_diagnose_propagates_cbs_site_context_fields(client):
     # administrative_unit are present -- a real assertion on the resulting
     # site_context requires either exposing it in the response or testing
     # _building_site_context directly (covered above).
+
+
+@pytest.mark.parametrize("drop", ["abc", "nan", True])
+def test_diagnose_rejects_invalid_oma_frequency_drop(client, drop):
+    payload = {
+        **_cbs_record("bina-004"),
+        "sensors": [
+            {"sensor_id": "s1", "name": "structural_risk_score", "unit": "ratio", "value": 0.1, "quality": True},
+        ],
+        "timestamp": time.time(),
+        "oma_frequency_drift": {"max_drop_pct": drop},
+    }
+    resp = client.post("/diagnose", json=payload)
+    assert resp.status_code == 422
+    assert "max_drop_pct" in resp.json()["detail"]

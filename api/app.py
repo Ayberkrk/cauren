@@ -164,9 +164,13 @@ def _score_from_mapping(data: Optional[Dict[str, Any]], keys: tuple[str, ...], d
         if isinstance(value, bool):
             return 1.0 if value else 0.0
         try:
-            return max(0.0, min(1.0, float(value)))
+            score = float(value)
         except (TypeError, ValueError):
             continue
+        # max(0, min(1, nan)) is 1.0, so a NaN would read as maximum risk.
+        if not math.isfinite(score):
+            continue
+        return max(0.0, min(1.0, score))
     return default
 
 
@@ -488,10 +492,23 @@ async def calibrate(payload: CalibrateIn):
     return await run_in_threadpool(_sync_calibrate, payload)
 
 
+def _validate_oma_frequency_drift(drift: Optional[Dict[str, Any]]) -> None:
+    if not drift or drift.get("max_drop_pct") is None:
+        return
+    value = drift["max_drop_pct"]
+    try:
+        number = float(value) if not isinstance(value, bool) else math.nan
+    except (TypeError, ValueError):
+        number = math.nan
+    if not math.isfinite(number):
+        raise HTTPException(status_code=422, detail="oma_frequency_drift.max_drop_pct must be a finite number")
+
+
 @app.post("/diagnose")
 async def diagnose(payload: DiagnoseIn, explain: bool = False):
     if not payload.sensors and not str(payload.building_id or "").strip():
         raise HTTPException(status_code=422, detail="either sensors or a CBS building_id payload is required")
+    _validate_oma_frequency_drift(payload.oma_frequency_drift)
     return await run_in_threadpool(_sync_diagnose, payload, explain)
 
 

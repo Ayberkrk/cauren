@@ -1,8 +1,31 @@
 from __future__ import annotations
 
+import math
+
 from cauren_core.contracts import AgentSchema, SensorWindow
 
 from .common import DomainPhysics, PhysicsKnowledge, build_relation, latest, measurement_quality_penalty
+
+
+def _usable_ratio(value: float | None) -> float | None:
+    """Return a ratio feature only if it is finite and inside [0, 1].
+
+    Quality control already reports out-of-range values as
+    `value_out_of_range`; scoring them here would let a value the pipeline
+    knows is invalid push a subsystem below zero or saturate it at 1.0, so
+    the physics relations treat such a value as unavailable instead.
+    """
+    if value is None or not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        return None
+    return value
+
+
+def _finite_or_none(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 class CivilPhysics(DomainPhysics):
@@ -39,29 +62,31 @@ class CivilPhysics(DomainPhysics):
     )
 
     def evaluate(self, *, window: SensorWindow, schema: AgentSchema, context: dict) -> object:
-        structural_risk = latest(window, "structural_risk_score")
-        inspection_score = latest(window, "inspection_finding_score")
-        permit_score = latest(window, "permit_status_score")
-        progress_pct = latest(window, "construction_progress_pct")
-        infrastructure_score = latest(window, "infrastructure_connection_score")
-        natural_hazard = latest(window, "natural_hazard_score")
-        occupancy_safety = latest(window, "occupancy_safety_score")
-        ground_stability = latest(window, "ground_stability_score")
+        raw = {
+            name: latest(window, name)
+            for name in (
+                "structural_risk_score",
+                "inspection_finding_score",
+                "permit_status_score",
+                "construction_progress_pct",
+                "infrastructure_connection_score",
+                "natural_hazard_score",
+                "occupancy_safety_score",
+                "ground_stability_score",
+            )
+        }
+        structural_risk = _usable_ratio(raw["structural_risk_score"])
+        inspection_score = _usable_ratio(raw["inspection_finding_score"])
+        permit_score = _usable_ratio(raw["permit_status_score"])
+        progress_pct = _finite_or_none(raw["construction_progress_pct"])
+        infrastructure_score = _usable_ratio(raw["infrastructure_connection_score"])
+        natural_hazard = _usable_ratio(raw["natural_hazard_score"])
+        occupancy_safety = _usable_ratio(raw["occupancy_safety_score"])
+        ground_stability = _usable_ratio(raw["ground_stability_score"])
 
-        missing = [
-            name
-            for name, value in {
-                "structural_risk_score": structural_risk,
-                "inspection_finding_score": inspection_score,
-                "permit_status_score": permit_score,
-                "construction_progress_pct": progress_pct,
-                "infrastructure_connection_score": infrastructure_score,
-                "natural_hazard_score": natural_hazard,
-                "occupancy_safety_score": occupancy_safety,
-                "ground_stability_score": ground_stability,
-            }.items()
-            if value is None
-        ]
+        # Missing means "not supplied". A supplied but unusable value is not
+        # listed here; quality control reports it separately.
+        missing = [name for name, value in raw.items() if value is None]
 
         relations = []
         subsystem_scores = {
@@ -223,8 +248,13 @@ class CivilPhysics(DomainPhysics):
         # folds into structural_reliability rather than sitting off to the
         # side as an unrelated signal.
         oma_drift = context.get("oma_frequency_drift") if isinstance(context, dict) else None
-        if isinstance(oma_drift, dict) and oma_drift.get("max_drop_pct") is not None:
-            max_drop_pct = float(oma_drift["max_drop_pct"])
+        max_drop_pct = (
+            _finite_or_none(oma_drift.get("max_drop_pct")) if isinstance(oma_drift, dict) else None
+        )
+        # A NaN would otherwise pass through max(0, min(1, x)) as 1.0, the
+        # strongest possible evidence, so a non-finite or non-numeric drop is
+        # ignored here. The API rejects such input before it gets this far.
+        if isinstance(oma_drift, dict) and max_drop_pct is not None:
             severity = str(oma_drift.get("overall_severity") or "none")
             # 15% frequency drop maps to full-strength evidence; below that,
             # scale down linearly so a small drop reads as mild concern.
