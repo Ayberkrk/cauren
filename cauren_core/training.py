@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,69 @@ from cauren_core.backbone_model import create_cauren_backbone_model
 DEFAULT_TRAINING_ROLES = ("mae_reconstruction",)
 DEFAULT_SPLITS = ("train",)
 DEFAULT_VALIDATION_SPLITS = ("validation",)
+
+
+def require_nyc_training_eligibility(dataset_dir: Path) -> None:
+    """Refuse NYC administrative-outcome training without a current passing audit.
+
+    The NYC cohort has human-review and point-in-time evidence gates beyond
+    the usual tensor-shape checks. Bind the audit sidecar to the exact
+    dataset summary so rebuilding the cohort invalidates any previous pass.
+    """
+    summary_path = dataset_dir / "dataset_summary.json"
+    # The summary is produced by the NYC builder, but it is itself part of
+    # the dataset and can be lost or edited when a cohort is copied. Treat the
+    # canonical output path and the NYC audit input bundle as independent
+    # identity signals so deleting/mislabeling the summary cannot disable the
+    # human-review and point-in-time gate.
+    nyc_path = any(part.lower().startswith("cauren_civil_nyc") for part in dataset_dir.parts)
+    nyc_audit_inputs = all(
+        (dataset_dir / name).is_file()
+        for name in ("label_ledger.csv", "features.csv", "certificates.csv", "linkage_review_queue.csv")
+    )
+    summary = None
+    summary_bytes = None
+    if summary_path.is_file():
+        summary_bytes = summary_path.read_bytes()
+        summary = json.loads(summary_bytes.decode("utf-8"))
+    is_nyc_dataset = nyc_path or nyc_audit_inputs or (
+        summary is not None and str(summary.get("dataset_id", "")).startswith("cauren_civil_nyc_")
+    )
+    if not is_nyc_dataset:
+        return
+    if summary_bytes is None:
+        raise ValueError("NYC civil training is blocked: dataset_summary.json is missing; rebuild and audit the dataset first.")
+    if not str(summary.get("dataset_id", "")).startswith("cauren_civil_nyc_"):
+        raise ValueError("NYC civil training is blocked: dataset_summary.json does not identify an NYC cohort.")
+    eligibility_path = dataset_dir / "modeling_eligibility.json"
+    if not eligibility_path.exists():
+        raise ValueError(
+            "NYC civil training is blocked: run tools/audit_nyc_civil_dataset.py "
+            "--require-model-ready first; no modeling_eligibility.json was found."
+        )
+    report = json.loads(eligibility_path.read_text(encoding="utf-8"))
+    eligibility = report.get("training_eligibility", {})
+    if not eligibility.get("eligible", False):
+        blockers = ", ".join(eligibility.get("blockers", [])) or "audit gates did not pass"
+        raise ValueError(f"NYC civil training is blocked: {blockers}")
+    current_summary_hash = hashlib.sha256(summary_bytes).hexdigest()
+    if report.get("dataset_summary_sha256") != current_summary_hash:
+        raise ValueError("NYC civil training is blocked: eligibility report is stale for this dataset summary.")
+    expected_hashes = report.get("audit_input_sha256", {})
+    if not isinstance(expected_hashes, dict) or not expected_hashes:
+        raise ValueError("NYC civil training is blocked: eligibility report does not bind audited input files.")
+    for file_name, expected_hash in expected_hashes.items():
+        input_path = dataset_dir / file_name
+        if not input_path.is_file() or _sha256_file(input_path) != expected_hash:
+            raise ValueError(f"NYC civil training is blocked: audited input changed or is missing: {file_name}.")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -76,6 +140,7 @@ def _checkpoint_selection_metric_value(
 
 
 def train_cauren_core(config: CaurenCoreTrainConfig) -> dict[str, Any]:
+    require_nyc_training_eligibility(config.dataset_dir)
     torch = None if config.dry_run else _import_torch()
     if torch is not None:
         _set_seed(torch, config.seed)

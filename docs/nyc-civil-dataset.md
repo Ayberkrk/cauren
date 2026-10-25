@@ -144,6 +144,12 @@ clean structural audit does not resolve any of those evidence gaps. Do not
 train a model or describe these rows as validated ground truth until the
 review and point-in-time gates pass.
 
+The audit writes `modeling_eligibility.json` into the normalized dataset
+directory. `tools/train_cauren_core.py` refuses an NYC dataset unless that
+file records every required gate as passing. Use `--require-model-ready` on
+the audit command in automation so a blocked dataset returns a nonzero exit
+status before any training job starts.
+
 ## Reproduction
 
 ```bash
@@ -173,7 +179,8 @@ python3 tools/build_nyc_civil_dataset.py \
   --horizon-years 5
 python3 tools/audit_nyc_civil_dataset.py \
   --dataset-dir data/cauren_civil_nyc/normalized \
-  --output-json data/cauren_civil_nyc/normalized/audit_report.json
+  --output-json data/cauren_civil_nyc/normalized/audit_report.json \
+  --require-model-ready
 ```
 
 Start from a new raw snapshot directory for changed source filters or cohort

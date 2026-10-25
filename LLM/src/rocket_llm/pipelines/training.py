@@ -50,16 +50,17 @@ def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
         if not line:
             continue
         try:
             payload = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            rows.append(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSONL record at {path}:{line_number}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected a JSON object at {path}:{line_number}")
+        rows.append(payload)
     return rows
 
 
@@ -152,10 +153,12 @@ def _convert_feedback_records_to_sft_rows(*, feedback_jsonl: Path, system_prompt
     return chat_rows
 
 
-def prepare_sft_dataset() -> None:
-    registry = TrainingPipelineRegistry(TRAINING_CONFIG)
+def prepare_sft_dataset(config_path: str | Path | None = None) -> dict[str, Any]:
+    registry = TrainingPipelineRegistry(config_path or TRAINING_CONFIG)
     job = registry.ensure_enabled("prepare_sft_dataset")
     input_jsonl = registry.resolve_path(str(job.get("input_jsonl", "data/processed/sft_fault_kb_merged.jsonl")))
+    if not input_jsonl.is_file():
+        raise FileNotFoundError(f"Structured SFT input does not exist: {input_jsonl}")
     output_jsonl = registry.resolve_path(str(job.get("output_jsonl", "data/processed/qwen_sft_chat.jsonl")))
     feedback_training_jsonl = str(job.get("feedback_training_jsonl", "data/feedback/decision_feedback_training.jsonl")).strip()
     feedback_path = registry.resolve_path(feedback_training_jsonl) if feedback_training_jsonl else None
@@ -166,9 +169,20 @@ def prepare_sft_dataset() -> None:
         )
     )
     structured_rows = _structured_to_chat_rows(input_structured_jsonl=input_jsonl, system_prompt=system_prompt)
-    _write_jsonl_rows(output_jsonl, structured_rows)
+    feedback_rows: list[dict[str, Any]] = []
     if feedback_path is not None and feedback_path.exists():
-        _append_jsonl_rows(
-            output_jsonl,
-            _convert_feedback_records_to_sft_rows(feedback_jsonl=feedback_path, system_prompt=system_prompt),
+        feedback_rows = _convert_feedback_records_to_sft_rows(
+            feedback_jsonl=feedback_path,
+            system_prompt=system_prompt,
         )
+    if not structured_rows and not feedback_rows:
+        raise ValueError("No structured or engineer-reviewed records were available for SFT preparation.")
+    _write_jsonl_rows(output_jsonl, structured_rows)
+    _append_jsonl_rows(output_jsonl, feedback_rows)
+    return {
+        "status": "prepared",
+        "output_jsonl": str(output_jsonl),
+        "structured_rows": len(structured_rows),
+        "engineer_reviewed_feedback_rows": len(feedback_rows),
+        "total_rows": len(structured_rows) + len(feedback_rows),
+    }

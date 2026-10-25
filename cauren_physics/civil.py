@@ -256,20 +256,20 @@ class CivilPhysics(DomainPhysics):
         # ignored here. The API rejects such input before it gets this far.
         if isinstance(oma_drift, dict) and max_drop_pct is not None:
             severity = str(oma_drift.get("overall_severity") or "none")
-            # 15% frequency drop maps to full-strength evidence; below that,
-            # scale down linearly so a small drop reads as mild concern.
-            score = max(0.0, min(1.0, max_drop_pct / 15.0))
-            if score > 0.0:
-                subsystem_scores["structural_reliability"] = max(
-                    subsystem_scores["structural_reliability"], score
-                )
+            # Preserve the measured drift as inspectable evidence. Do not turn
+            # an arbitrary percentage-to-risk mapping into a structural-risk
+            # contribution without a validated structure-specific threshold.
+            if max_drop_pct > 0.0:
                 relations.append(
                     build_relation(
                         "modal_frequency_drift",
-                        score,
-                        "Yapinin dogal frekansinda taban degere gore dusus, olasi rijitlik kaybina isaret eder.",
+                        0.0,
+                        "Measured modal-frequency change against the caller-provided baseline; this uncalibrated signal requires independent engineering review.",
                         max_drop_pct=round(max_drop_pct, 6),
                         severity=severity,
+                        severity_validation_status="caller_supplied_unvalidated_threshold",
+                        risk_mapping_status="not_established",
+                        informational_only=True,
                     )
                 )
 

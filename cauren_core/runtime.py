@@ -607,33 +607,15 @@ def _contextual_anomaly_score(window: SensorWindow, context: dict) -> float:
 
 
 def _seasonal_deviation_score(window: SensorWindow, context: dict) -> float:
-    tokens = _lowered_context_tokens(context)
-    if not tokens:
-        return 0.0
-    if not window.matrix or not window.features:
-        return 0.0
-    flagged = bool(tokens & {"seasonal_alert", "season_mismatch", "heating_out_of_season", "cooling_out_of_season"})
-    winter = bool(tokens & {"winter", "heating_season"})
-    summer = bool(tokens & {"summer", "cooling_season"})
-    if not (flagged or winter or summer):
-        return 0.0
-    strongest = 0.0
-    for idx, feature in enumerate(window.features):
-        observed = [row[idx] for row, mask_row in zip(window.matrix, window.presence_mask) if mask_row[idx]]
-        if len(observed) < 3:
-            continue
-        feature_name = feature.name.lower()
-        baseline = float(statistics.median(observed))
-        latest_value = float(window.matrix[-1][idx])
-        spread = float(statistics.pstdev(observed)) + 1e-6
-        normalized = abs(latest_value - baseline) / max(abs(baseline) * 0.08, spread * 2.0, 1e-6)
-        if winter and any(token in feature_name for token in ("cool", "outdoor", "compressor")):
-            strongest = max(strongest, normalized)
-        if summer and any(token in feature_name for token in ("heat", "indoor", "hvac")):
-            strongest = max(strongest, normalized)
-    if flagged:
-        strongest = max(strongest, 0.75)
-    return min(1.0, strongest if strongest >= 0.3 else 0.0)
+    """Return no seasonal score until an agent supplies a validated rule.
+
+    The previous implementation inferred HVAC-specific feature semantics from
+    feature-name substrings, then assigned a fixed score for a context flag.
+    Neither behavior is meaningful for the civil and bridge schemas. Keep the
+    output key for API compatibility, but fail closed instead of treating a
+    season label or an unrelated feature as evidence of an anomaly.
+    """
+    return 0.0
 
 
 def _pearson(left: list[float], right: list[float]) -> float | None:

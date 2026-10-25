@@ -6,25 +6,28 @@ full normalize -> route -> anomaly-core -> physics -> compose pipeline, and
 returns the result (including the quality-control report and uncertainty
 band -- see cauren_core.quality_control / cauren_core.uncertainty) as JSON.
 
-This is a research prototype's HTTP surface, not a hardened multi-tenant
-production service: there is no authentication, no per-tenant isolation,
-and no persistence beyond the process's lifetime. Anyone who can reach
-this port can call every route. Put a reverse proxy, auth layer, or
-network restriction in front of it yourself before exposing it beyond
-localhost.
+This is a single-operator API. It stores diagnosis responses in a local
+SQLite history (90 days by default); raw requests are not retained. Set
+CAUREN_API_KEY to require Bearer authentication on non-health routes.
+This is not a multi-tenant service.
 """
 
 from __future__ import annotations
 
+import hmac
+import json
 import logging
 import math
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from .history import persist_history, read_history
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cauren_civil_api")
@@ -34,9 +37,79 @@ app = FastAPI(
     description="Civil engineering diagnostics and decision-support runtime.",
 )
 
+MAX_REQUEST_BYTES = 1_048_576
+MAX_SENSOR_ROWS = 8192
+
 ASSET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 SEQ_MIN, SEQ_MAX = 1, 4096
 SAMPLING_HZ_MIN, SAMPLING_HZ_MAX = 1e-9, 1000.0
+
+
+class RequestGuardMiddleware:
+    """Enforce bounded request bodies and optional Bearer authentication."""
+
+    def __init__(self, app, max_body_bytes: int = MAX_REQUEST_BYTES):
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        api_key = os.getenv("CAUREN_API_KEY", "").strip()
+        if api_key and path not in {"/health/liveness", "/health/readiness"}:
+            authorization = headers.get(b"authorization", b"").decode("latin-1")
+            scheme, _, supplied = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, api_key):
+                await self._respond(send, 401, {"detail": "Bearer authentication required"}, [(b"www-authenticate", b"Bearer")])
+                return
+
+        try:
+            declared_length = int(headers.get(b"content-length", b"0") or b"0")
+        except ValueError:
+            declared_length = self.max_body_bytes + 1
+        if declared_length > self.max_body_bytes:
+            await self._respond(send, 413, {"detail": "request body exceeds 1 MiB limit"})
+            return
+
+        body = bytearray()
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            body.extend(message.get("body", b""))
+            if len(body) > self.max_body_bytes:
+                await self._respond(send, 413, {"detail": "request body exceeds 1 MiB limit"})
+                return
+            more_body = message.get("more_body", False)
+
+        sent = False
+
+        async def replay_body():
+            nonlocal sent
+            if sent:
+                # The body is fully replayed; later receives must still report
+                # a real client disconnect instead of an endless empty request.
+                return await receive()
+            sent = True
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        await self.app(scope, replay_body, send)
+
+    @staticmethod
+    async def _respond(send, status_code: int, body: dict[str, Any], extra_headers=()):
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers = [(b"content-type", b"application/json"), (b"content-length", str(len(encoded)).encode("ascii"))]
+        headers.extend(extra_headers)
+        await send({"type": "http.response.start", "status": status_code, "headers": headers})
+        await send({"type": "http.response.body", "body": encoded})
+
+
+app.add_middleware(RequestGuardMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +133,7 @@ class CalibrateIn(BaseModel):
     seq_len: int = 16
     sampling_hz: float = 1.0
     runtime_mode: Optional[str] = None
-    sensors: Optional[List[Dict[str, Any]]] = None
+    sensors: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=MAX_SENSOR_ROWS)
     ingress_tag: Optional[str] = None
     ingress_tags: Optional[List[str]] = None
     sector_hint: Optional[str] = None
@@ -84,16 +157,15 @@ class DiagnoseIn(BaseModel):
     seq_len: int = 16
     sampling_hz: float = 1.0
     runtime_mode: Optional[str] = None
-    sensors: Optional[List[Dict[str, Any]]] = None
+    sensors: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=MAX_SENSOR_ROWS)
     ingress_tag: Optional[str] = None
     ingress_tags: Optional[List[str]] = None
     sector_hint: Optional[str] = None
     sector_hint_confidence: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
     oma_frequency_drift: Optional[Dict[str, Any]] = None
-    # CBS ("bina/insaat" GIS) building record fields. When `sensors` is not
-    # supplied, these are converted into the civil agent's 8 canonical
-    # sensor readings by `_building_sensors_from_payload` below.
+    # CBS ("bina/insaat" GIS) fields. When `sensors` is not supplied, only
+    # features supported by observed source values are converted into readings.
     building_id: Optional[str] = None
     geometry: Optional[Dict[str, Any]] = None
     address: Optional[Dict[str, Any]] = None
@@ -154,7 +226,7 @@ def _validate_common_fields(
 # ---------------------------------------------------------------------------
 
 
-def _score_from_mapping(data: Optional[Dict[str, Any]], keys: tuple[str, ...], default: float) -> float:
+def _score_from_mapping(data: Optional[Dict[str, Any]], keys: tuple[str, ...], default: float | None = None) -> float | None:
     if not isinstance(data, dict):
         return default
     for key in keys:
@@ -177,8 +249,8 @@ def _score_from_mapping(data: Optional[Dict[str, Any]], keys: tuple[str, ...], d
 def _progress_pct_from_mapping(
     data: Optional[Dict[str, Any]],
     keys: tuple[str, ...],
-    default: float,
-) -> float:
+    default: float | None = None,
+) -> float | None:
     if not isinstance(data, dict):
         return default
     for key in keys:
@@ -199,15 +271,15 @@ def _progress_pct_from_mapping(
     return default
 
 
-def _inspection_score(items: Optional[List[Dict[str, Any]]]) -> float:
-    if not items:
-        return 0.2
+def _inspection_score(items: Optional[List[Dict[str, Any]]]) -> float | None:
     scores = [
-        _score_from_mapping(item, ("finding_score", "severity_score", "score"), 0.2)
-        for item in items
+        score
+        for item in (items or [])
         if isinstance(item, dict)
+        for score in [_score_from_mapping(item, ("finding_score", "severity_score", "score"))]
+        if score is not None
     ]
-    return max(scores) if scores else 0.2
+    return max(scores) if scores else None
 
 
 def _uses_cbs_building_payload(payload: DiagnoseIn) -> bool:
@@ -220,28 +292,29 @@ def _building_sensors_from_payload(payload: DiagnoseIn) -> list[dict[str, Any]]:
     status = payload.construction_status
     infra = payload.infrastructure_connections
     findings = payload.inspection_findings
-    timestamp = time.time()
-    progress = _progress_pct_from_mapping(status, ("progress_pct", "completion_pct", "construction_progress_pct"), 0.0)
+    timestamp = float(payload.timestamp) if payload.timestamp is not None else time.time()
     values = {
         "structural_risk_score": _score_from_mapping(
-            risk, ("structural_risk_score", "structural_risk", "building_risk_score", "risk_score"), 0.25
+            risk, ("structural_risk_score", "structural_risk", "building_risk_score", "risk_score")
         ),
         "inspection_finding_score": _inspection_score(findings),
         "permit_status_score": _score_from_mapping(
-            permit, ("permit_status_score", "document_readiness_score", "approval_score", "approved"), 0.5
+            permit, ("permit_status_score", "document_readiness_score", "approval_score", "approved")
         ),
-        "construction_progress_pct": progress,
+        "construction_progress_pct": _progress_pct_from_mapping(
+            status, ("progress_pct", "completion_pct", "construction_progress_pct")
+        ),
         "infrastructure_connection_score": _score_from_mapping(
-            infra, ("infrastructure_connection_score", "readiness_score", "utility_connection_score", "ready"), 0.5
+            infra, ("infrastructure_connection_score", "readiness_score", "utility_connection_score", "ready")
         ),
         "natural_hazard_score": _score_from_mapping(
-            risk, ("natural_hazard_score", "earthquake_risk_score", "flood_risk_score", "natural_risk_score"), 0.2
+            risk, ("natural_hazard_score", "earthquake_risk_score", "flood_risk_score", "natural_risk_score")
         ),
         "occupancy_safety_score": _score_from_mapping(
-            risk, ("occupancy_safety_score", "life_safety_score", "occupancy_risk_score"), 0.2
+            risk, ("occupancy_safety_score", "life_safety_score", "occupancy_risk_score")
         ),
         "ground_stability_score": _score_from_mapping(
-            risk, ("ground_stability_score", "ground_risk_score", "geotechnical_risk_score"), 0.2
+            risk, ("ground_stability_score", "ground_risk_score", "geotechnical_risk_score")
         ),
     }
     building_id = str(payload.building_id or "building")
@@ -252,10 +325,27 @@ def _building_sensors_from_payload(payload: DiagnoseIn) -> list[dict[str, Any]]:
             "unit": "%" if name == "construction_progress_pct" else "ratio",
             "value": round(float(value), 6),
             "timestamp": timestamp,
-            "quality": True,
+            "metadata": {
+                "source": "cbs_payload",
+                "source_section": _CBS_FEATURE_SECTIONS[name],
+                "observed": True,
+            },
         }
         for name, value in values.items()
+        if value is not None
     ]
+
+
+_CBS_FEATURE_SECTIONS = {
+    "structural_risk_score": "risk_assessments",
+    "inspection_finding_score": "inspection_findings",
+    "permit_status_score": "project_permit",
+    "construction_progress_pct": "construction_status",
+    "infrastructure_connection_score": "infrastructure_connections",
+    "natural_hazard_score": "risk_assessments",
+    "occupancy_safety_score": "risk_assessments",
+    "ground_stability_score": "risk_assessments",
+}
 
 
 def _building_site_context(payload: DiagnoseIn) -> dict[str, Any]:
@@ -325,7 +415,7 @@ def _sync_calibrate(payload: CalibrateIn) -> dict:
         }
         result = _get_cauren_pipeline().calibrate(cauren_payload)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        return {
+        response = {
             "calibrated_data": result["calibrated_data"],
             "feature_names": result["feature_names"],
             "feature_metadata": result["feature_metadata"],
@@ -354,11 +444,13 @@ def _sync_calibrate(payload: CalibrateIn) -> dict:
                 "router_confidence": result["confidence"],
             },
         }
+        persist_history(asset_id=asset_id, kind="calibrate", result=response)
+        return response
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("cauren_calibrate_failed asset_id=%s", getattr(payload, "asset_id", "unknown"))
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="calibration could not be processed") from exc
 
 
 def _sync_diagnose(payload: DiagnoseIn, explain: bool) -> dict:
@@ -370,6 +462,7 @@ def _sync_diagnose(payload: DiagnoseIn, explain: bool) -> dict:
             asset_id, timestamp, int(payload.seq_len), float(payload.sampling_hz), payload.runtime_mode
         )
         uses_cbs = _uses_cbs_building_payload(payload)
+        cbs_sensors = _building_sensors_from_payload(payload) if uses_cbs else None
         cauren_payload = {
             "asset_id": asset_id,
             "agent_id": "cauren-civil" if uses_cbs else payload.agent_id,
@@ -383,7 +476,7 @@ def _sync_diagnose(payload: DiagnoseIn, explain: bool) -> dict:
             "seq_len": int(payload.seq_len),
             "sampling_hz": float(sampling_hz_effective),
             "runtime_mode": runtime_mode,
-            "sensors": _building_sensors_from_payload(payload) if uses_cbs else (payload.sensors or []),
+            "sensors": cbs_sensors if uses_cbs else (payload.sensors or []),
             "ingress_tag": payload.ingress_tag,
             "ingress_tags": payload.ingress_tags or [],
             "sector_hint": payload.sector_hint,
@@ -418,12 +511,20 @@ def _sync_diagnose(payload: DiagnoseIn, explain: bool) -> dict:
             "cbs_building_payload": uses_cbs,
             "explain": bool(explain),
         }
+        if uses_cbs:
+            observed = {row["name"] for row in (cbs_sensors or [])}
+            body["meta"]["cbs_observed_features"] = sorted(observed)
+            body["meta"]["cbs_missing_features"] = sorted(set(_CBS_FEATURE_SECTIONS) - observed)
+            body["meta"]["cbs_feature_sources"] = {
+                row["name"]: row["metadata"]["source_section"] for row in (cbs_sensors or [])
+            }
+        persist_history(asset_id=asset_id, kind="diagnose", result=body)
         return body
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("cauren_diagnose_failed asset_id=%s", getattr(payload, "asset_id", "unknown"))
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="diagnosis could not be processed") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +584,13 @@ def list_cauren_agents():
         "output_taxonomy": "anomaly_type_plus_risk_score",
         "agents": agents,
     }
+
+
+@app.get("/history/{asset_id}")
+def get_asset_history(asset_id: str, limit: int = Query(default=100, ge=1, le=1000)):
+    if not ASSET_ID_PATTERN.fullmatch(asset_id):
+        raise HTTPException(status_code=422, detail="asset_id must match [a-zA-Z0-9_-]{1,64}")
+    return {"asset_id": asset_id, "records": read_history(asset_id=asset_id, limit=limit)}
 
 
 @app.post("/calibrate")

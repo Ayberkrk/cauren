@@ -24,6 +24,43 @@ jobs:
       - name: Run the test suite
         run: python -m pytest tests/ -v
 
+  optional-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install optional test dependencies
+        run: pip install -e '.[test,backbone,dataset,benchmark]' 'PyYAML>=6'
+
+      - name: Run the complete test suite
+        run: python -m pytest tests/ -v
+
+      - name: Run the LLM data-preparation tests
+        run: |
+          pip install -e "./LLM[dev]"
+          python -m pytest LLM/tests/ -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install lint dependencies
+        run: pip install -e '.[lint]'
+
+      - name: Lint Python sources
+        run: ruff check api cauren_agents cauren_core cauren_physics tools tests LLM/src LLM/tests
+
   container:
     runs-on: ubuntu-latest
     steps:

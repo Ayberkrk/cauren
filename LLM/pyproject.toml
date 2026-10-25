@@ -15,6 +15,9 @@ dependencies = [
   "cryptography>=44.0.0,<45.0.0",
 ]
 
+[project.scripts]
+rocket-llm-prepare-sft = "rocket_llm.cli:prepare_sft_dataset_main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.5,<9.0.0",
@@ -43,13 +46,8 @@ ft_training = [
   "bitsandbytes>=0.43.0,<1.0.0",
 ]
 
-# No [project.scripts] yet: this sub-project is pre-alpha (see the root
-# README), and every one of these commands would previously have pointed
-# at a module that doesn't exist under src/rocket_llm/ yet (rocket_llm.cli,
-# rocket_llm.dataset_cli, rocket_llm.no_train_cli, rocket_llm.briefing),
-# so `pip install`-ing this package would advertise entry points that
-# fail with ModuleNotFoundError the moment they're run. Re-add each
-# command here once its backing module actually exists:
+# Only the SFT data-preparation command is implemented. The other planned
+# commands stay disabled until their backing modules and tests exist:
 #
 # rocket-llm = "rocket_llm.cli:main"
 # rocket-llm-generate-scenarios = "rocket_llm.dataset_cli:generate_scenarios_main"

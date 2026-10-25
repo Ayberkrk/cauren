@@ -6,10 +6,11 @@
 
 Cauren is a civil-engineering diagnostics and decision-support system.
 It ingests sensor/CBS ("bina/insaat" GIS) readings or bridge inspection
-records, normalizes them into a canonical feature schema, runs them
-through a generic anomaly-detection core, and hands the result to a
-domain physics/reasoning layer to produce an explainable,
-**non-authoritative** risk diagnosis.
+records, normalizes them into a canonical feature schema, and runs a
+generic anomaly-detection core alongside a domain evidence layer. Current
+physics heuristics are diagnostic-only: none contributes to active risk
+until its validation is documented and explicitly enabled. Diagnoses are
+**non-authoritative** decision support.
 
 Cauren does not issue final engineering decisions or automated
 enforcement. Diagnoses are meant for field inspection, permit review,
@@ -165,15 +166,16 @@ This project is a working research prototype, not a finished product.
 - **A single-snapshot request has no time series to analyze.** If you
   send one reading per feature with no history, the core reports
   `insufficient_temporal_history` / `snapshot_only` instead of a
-  fabricated pattern verdict, and the risk score is driven mainly by
-  the physics layer's read of the values you sent. Send a real time
-  series (`seq_len` distinct timestamps) for genuine pattern-shape
-  detection (drift, spike, oscillation, flatline, and so on).
-- **`LLM/` (`rocket_llm`) is pre-alpha.** No CLI is exposed yet --
-  `pyproject.toml` deliberately has no `[project.scripts]` section,
-  commented out until each backing module exists (see the file for the
-  planned list). Only `LLM/src/rocket_llm/pipelines/training.py` is
-  implemented so far.
+  fabricated pattern verdict. Current physics relations remain visible
+  as unvalidated diagnostic evidence but are suppressed from the active
+  risk contribution; the statistical core is also a research signal, not
+  an engineering judgment. Send a real time series (`seq_len` distinct
+  timestamps) for pattern-shape detection (drift, spike, oscillation,
+  flatline, and so on).
+- **`LLM/` (`rocket_llm`) is pre-alpha.** Its only CLI,
+  `rocket-llm-prepare-sft`, converts structured and engineer-reviewed
+  records into SFT JSONL; it does not run a model or train weights. The
+  job stays disabled in the default config until an operator enables it.
 - **`cauren-civil` does not derive its 8 scores from raw sensor/CBS
   data, it consumes them.** The required features are expected to
   already exist (from a field inspection, an engineering assessment,
@@ -224,7 +226,8 @@ run on the way to it, so a reviewer can see how much to trust it:
 |---|---|
 | `quality_control` | Were the inputs usable? Required-feature completeness, unit-range sanity, flatline/stuck sensors, how many sensor names failed to normalize, how many raw readings were rejected. |
 | `uncertainty_report` | How much should the score be trusted? A confidence band around the risk score derived from data quality, the core's own confidence, and how much of the physics schema had evidence. |
-| `physics_evidence` | Why is the score what it is? The domain relations that fired, and which required features were missing. |
+| `risk_score_status` | Whether the numeric score is based on validated physics rules, a statistical research signal, or insufficient evidence. A numeric zero with `insufficient_validated_evidence` must not be read as low risk. |
+| `physics_evidence` | Which domain relations were observed, which required features were missing, and whether a relation is validated and enabled to affect risk. Current heuristic relations are diagnostic-only. |
 
 Structural-health inputs are optional and separate. `cauren_physics/oma.py`
 identifies natural frequencies from one vibration channel and estimates
@@ -286,9 +289,9 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (137 tests with the minimal dependency set; 156 total once pandas/torch/PyYAML are also installed) |
+| `tests/` | Test suite (164 tests with minimal dependencies; 183 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
-| `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
+| `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
 ## API endpoints
 
@@ -296,14 +299,17 @@ reviewer, not damage verdicts.
 |---|---|---|
 | `GET` | `/health/liveness`, `/health/readiness` | Health checks |
 | `GET` | `/agents` | List registered sector agents |
+| `GET` | `/history/{asset_id}` | Retrieve recent local diagnosis/calibration responses for one asset |
 | `POST` | `/calibrate` | Normalize/calibrate a sensor payload without running physics |
 | `POST` | `/diagnose` | Full pipeline: route, calibrate, classify, physics, compose. Accepts either a `sensors` list or a CBS-shaped building record (`building_id` + `risk_assessments`/`project_permit`/etc, converted internally) |
 
-`api/app.py` is a thin, unauthenticated wrapper around
-`cauren_core.CaurenPipeline` -- there is no built-in login, token, or
-per-tenant access control. It's meant to be run locally or behind
-whatever the operator puts in front of it (a reverse proxy, an auth
-layer), not exposed to the open internet as-is.
+The API is for one local operator, not multiple tenants. Successful
+diagnosis and calibration responses are stored in local SQLite history
+with 90-day default retention; raw request bodies are not stored. Set
+`CAUREN_API_KEY` to require Bearer authentication on non-health routes.
+Request bodies are capped at 1 MiB and sensor lists at 8,192 rows. Stored
+responses can contain asset feature values and risk results; protect the
+database file. See [API history and access controls](docs/api-history-and-access.md).
 
 ## Run the API with Docker
 
@@ -321,9 +327,9 @@ http://127.0.0.1:8000/health/readiness. Stop it with:
 docker compose down
 ```
 
-This local setup does not add authentication or tenant isolation. Do not
-change the port binding or expose the service publicly without placing
-appropriate access controls in front of it.
+Compose stores history in a named volume and binds the service to localhost.
+Set `CAUREN_API_KEY` in the environment to protect API routes. The service
+does not provide tenant isolation or encrypted/replicated storage.
 
 ## Quick start
 
@@ -333,7 +339,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 137 tests, no network/GPU/numpy/torch required (156 total with pandas/torch/PyYAML also installed)
+python3 -m pytest tests/            # 164 tests, no network/GPU/numpy/torch required (183 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

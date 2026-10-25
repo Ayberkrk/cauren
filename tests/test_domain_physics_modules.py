@@ -1,5 +1,7 @@
 from cauren_agents.civil.agent import build_civil_agent
 from cauren_core.adapter import AgentSchemaAdapter, parse_sensor_readings
+from cauren_core.contracts import FeatureMetadata, SensorWindow
+from cauren_physics.common import build_relation, latest
 
 
 
@@ -23,11 +25,53 @@ def test_civil_agent_emits_structural_and_readiness_relations():
     evidence = agent.physics.evaluate(window=window, schema=agent.schema, context={})
 
     assert evidence.agent_id == "cauren-civil"
-    assert evidence.risk_contribution > 0.0
+    assert evidence.risk_contribution == 0.0
+    assert evidence.agent_outputs["proposed_heuristic_risk_contribution"] > 0.0
+    assert evidence.agent_outputs["risk_contribution_status"] == "suppressed_unvalidated_rules"
     assert evidence.agent_outputs["physics_class"] == "CivilPhysics"
+    assert evidence.agent_outputs["interpretation_status"] == "non_authoritative_decision_support"
+    assert evidence.agent_outputs["engineering_validation_status"] == "not_established"
     names = {item["name"] for item in evidence.relations}
     assert "structural_ground_coupling" in names
     assert "construction_readiness_gap" in names
+    relation = next(item for item in evidence.relations if item["name"] == "structural_ground_coupling")
+    assert relation["validation_status"] == "unvalidated_decision_support_heuristic"
+    assert relation["risk_contribution_enabled"] is False
+    assert relation["references"] == []
+
+
+def test_unvalidated_relation_score_is_retained_but_cannot_raise_active_physics_risk():
+    agent = build_civil_agent()
+    relation = build_relation("prototype_rule", 0.9, "diagnostic-only evidence")
+
+    evidence = agent.physics.evidence(
+        schema=agent.schema,
+        risk=0.9,
+        relations=[relation],
+        missing_features=[],
+        notes=(),
+    )
+
+    assert evidence.relations[0]["score"] == 0.9
+    assert evidence.risk_contribution == 0.0
+    assert evidence.agent_outputs["proposed_heuristic_risk_contribution"] == 0.9
+    assert evidence.agent_outputs["risk_contribution_status"] == "suppressed_unvalidated_rules"
+
+
+def test_empty_physics_result_suppresses_proposed_risk_safely():
+    agent = build_civil_agent()
+
+    evidence = agent.physics.evidence(
+        schema=agent.schema,
+        risk=0.7,
+        relations=[],
+        missing_features=list(agent.schema.required_features),
+        notes=(),
+    )
+
+    assert evidence.risk_contribution == 0.0
+    assert evidence.agent_outputs["proposed_heuristic_risk_contribution"] == 0.7
+    assert evidence.agent_outputs["risk_contribution_status"] == "suppressed_unvalidated_rules"
 
 
 def test_civil_agent_folds_in_oma_frequency_drift_evidence():
@@ -50,7 +94,33 @@ def test_civil_agent_folds_in_oma_frequency_drift_evidence():
     relation = next(item for item in evidence.relations if item["name"] == "modal_frequency_drift")
     assert relation["max_drop_pct"] == 12.0
     assert relation["severity"] == "alarm"
-    assert evidence.agent_outputs["subsystem_scores"]["structural_reliability"] > 0.0
+    assert relation["severity_validation_status"] == "caller_supplied_unvalidated_threshold"
+    assert relation["risk_mapping_status"] == "not_established"
+    assert relation["informational_only"] is True
+    # The supplied physical scores contribute 0.2; an unvalidated OMA
+    # percentage-to-risk mapping must not inflate that contribution.
+    assert evidence.agent_outputs["subsystem_scores"]["structural_reliability"] == 0.2
+    assert evidence.risk_contribution == 0.0
+
+
+def test_latest_uses_last_observed_value_instead_of_unobserved_padding():
+    window = SensorWindow(
+        matrix=((0.2,), (0.9,)),
+        features=(FeatureMetadata(name="structural_risk_score", unit="ratio"),),
+        presence_mask=((True,), (False,)),
+    )
+
+    assert latest(window, "structural_risk_score") == 0.2
+
+
+def test_latest_returns_none_when_feature_has_no_observed_evidence():
+    window = SensorWindow(
+        matrix=((0.2,),),
+        features=(FeatureMetadata(name="structural_risk_score", unit="ratio"),),
+        presence_mask=((False,),),
+    )
+
+    assert latest(window, "structural_risk_score") is None
 
 
 def _civil_evidence(values: dict[str, float]):
