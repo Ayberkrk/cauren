@@ -78,3 +78,47 @@ def test_runs_are_reproducible_for_a_fixed_seed():
     second = bench.run_scenario("step_3sigma", trials=20, seed=5)
     assert first == second
     assert first["trials"] == 20 and 0 <= first["alarms"] <= 20
+
+
+# Acceptance targets for the reference-based core. A false-alarm target holds
+# when the Wilson 95% interval reaches down to it; a detection target holds
+# when the interval reaches up to it. (scenario, "max"/"min", rate)
+ACCEPTANCE = (
+    ("clean_noise", "max", 0.05),
+    ("constant_naturally_constant", "max", 0.02),
+    ("step_3sigma", "min", 0.90),
+    ("drift_3sigma", "min", 0.90),
+    ("spike_6sigma", "min", 0.85),
+    ("constant_expected_variation", "min", 0.90),
+)
+
+
+@pytest.fixture(scope="module")
+def acceptance_results():
+    results = bench.run_benchmark(scenarios=tuple(name for name, _, _ in ACCEPTANCE))
+    return {row["scenario"]: row for row in results}
+
+
+@pytest.mark.parametrize("scenario, direction, target", ACCEPTANCE)
+def test_reference_core_meets_acceptance_rates(acceptance_results, scenario, direction, target):
+    row = acceptance_results[scenario]
+    assert row["trials"] == bench.DEFAULT_TRIALS
+    if direction == "max":
+        assert row["wilson_low"] <= target, row
+    else:
+        assert row["wilson_high"] >= target, row
+
+
+def test_without_a_reference_the_core_reports_insufficient_evidence_instead_of_alarming():
+    from cauren_core import CaurenPipeline
+
+    pipeline = CaurenPipeline.from_default_registry()
+    rng = np.random.default_rng(9)
+    for name in ("clean_noise", "step_3sigma", "spike_6sigma", "constant_all_features"):
+        builder, _ = bench.SCENARIOS[name]
+        for _ in range(20):
+            diagnosis = pipeline.diagnose(bench.build_payload(builder(rng), include_reference=False))
+            assert diagnosis.risk_score < 0.34
+            assert diagnosis.risk_score_status == "insufficient_validated_evidence"
+            assert diagnosis.agent_outputs["reference"] == "none"
+            assert diagnosis.core_output.evidence_status == "insufficient_reference"
