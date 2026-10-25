@@ -70,3 +70,7 @@ data/cauren_bridge/
 # builder, and audits provide provenance.
 data/cauren_civil_nyc/raw/
 data/cauren_civil_nyc/normalized/
+
+# KW51 bridge monitoring data (Zenodo 3745914, CC BY-NC-SA 4.0). Downloaded by
+# tools/kw51_study.py --download and never committed.
+data/kw51/

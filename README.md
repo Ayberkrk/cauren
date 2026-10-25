@@ -205,6 +205,22 @@ transfer, so no new probability is exposed through the API. Protocol, state
 results, uncertainty intervals, and reproduction steps are in
 [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
 
+### KW51 bridge modal monitoring case study
+
+`tools/kw51_study.py` tests modal novelty detection on the KW51 steel railway
+bridge (Maes and Lombaert, Zenodo 3745914, CC BY-NC-SA 4.0; downloaded on
+demand, not committed), whose diagonal connections were strengthened in 2019.
+Detectors are fitted on October 2018 to March 2019. Raw-frequency
+Mahalanobis, temperature-normalized residual Mahalanobis, and PCA residual
+detectors all had 0 of 44 false-alarm days in the spring 2019 holdout and
+alarmed on all post-retrofit days from the first one. The retrofit moved two
+modes by about 2%, which makes this an easy case; a post-hoc subset of the
+three least-shifted modes shows temperature normalization widening the
+detection margin and PCA failing the false-alarm target. Fitted temperature
+slopes are negative for every mode, and the uneven, mixed-sign shifts are
+consistent with a local change. This is a single-bridge case study, not a
+validation. Details are in [docs/kw51-case-study.md](docs/kw51-case-study.md).
+
 ### NYC DOB research dataset
 
 The new-building permit cohort links BIS and DOB NOW permits to both
@@ -289,7 +305,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (163 tests with minimal dependencies; 182 total with optional dependencies) |
+| `tests/` | Test suite (163 tests with minimal dependencies; 193 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -339,7 +355,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (182 total with optional dependencies)
+python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (193 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
