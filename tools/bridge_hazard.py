@@ -212,7 +212,9 @@ def run(
     def record(name: str, probability: np.ndarray, extra: dict[str, Any]) -> None:
         metrics = score_metrics(windows.loc[test, "label"].astype(float).tolist(), probability[test].tolist())
         results["models"][name] = {**extra, "test_metrics": metrics}
-        predictions.extend(_prediction_rows(windows.loc[test], name, probability[test]))
+        # Validation rows are kept for post-hoc calibration (tools/bridge_calibration.py);
+        # the paired bootstrap only uses windows every model scored, i.e. test.
+        predictions.extend(_prediction_rows(windows, name, probability))
 
     for end_year in interval_end_years:
         train_rows = hazard_rows(panel, train_bridges, last_interval_end=end_year)
@@ -258,6 +260,7 @@ def run(
             probability = cumulative_risk(booster, anchors[held])
             results["leave_one_state_out"][state] = score_metrics(
                 windows.loc[held, "label"].astype(float).tolist(), probability.tolist())
+            predictions.extend(_prediction_rows(windows.loc[held], f"loso_v4_hazard_heldout_{state}", probability))
 
     with open(output_dir / "hazard_predictions.csv", "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -273,6 +276,7 @@ def compare(prediction_files: list[Path], reference_model: str, replicates: int 
     from tools.bridge_cluster_bootstrap import paired_cluster_bootstrap
 
     frame = pd.concat([pd.read_csv(path, dtype={"window_id": str, "asset_id": str}) for path in prediction_files])
+    frame = frame[frame["split"].eq("test") & ~frame["model"].str.startswith("loso_")]
     wide = frame.pivot_table(index=["window_id", "asset_id", "label"], columns="model", values="probability").dropna()
     wide = wide.reset_index()
     models = [column for column in wide.columns if column not in {"window_id", "asset_id", "label"}]

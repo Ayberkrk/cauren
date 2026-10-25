@@ -78,11 +78,15 @@ def main() -> None:
     if predictions.exists():
         hazard_args += ["--compare-with", str(predictions)]
     sh(*hazard_args)
+    calibration = v4 / "hazard" / "calibration.json"
+    sh("tools/bridge_calibration.py", "--predictions", str(v4 / "hazard" / "hazard_predictions.csv"),
+       "--model", "v4_hazard_end2023", "--output-json", str(calibration))
 
     report = {
         "v3_summary": json.loads((v3 / "dataset_summary.json").read_text()),
         "v4_summary": json.loads((v4 / "dataset_summary.json").read_text()),
         "hazard": json.loads((v4 / "hazard" / "hazard_results.json").read_text()),
+        "calibration": json.loads(calibration.read_text()),
     }
     if (v3 / "model_benchmark.json").exists():
         benchmark = json.loads((v3 / "model_benchmark.json").read_text())
