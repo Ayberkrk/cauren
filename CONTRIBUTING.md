@@ -16,14 +16,14 @@ python3 -m pytest tests/
 (equivalent to `pip install fastapi pydantic pytest httpx` if you'd
 rather not use the `pyproject.toml` extra)
 
-The 158 tests in the minimal dependency set should pass with no network access, no GPU, and without
+The 163 tests in the minimal dependency set should pass with no network access, no GPU, and without
 `numpy` or `torch` installed. Add `uvicorn` to run the API itself. If
 you are working on the `cauren-bridge` backbone you also need `torch`,
 `pyyaml` for the `LLM/` sub-project, and, to rebuild the bridge dataset
 from scratch, `pandas` and `scipy` (`pip install -e '.[backbone,dataset]'`
 covers both of the latter two cases) -- installing the optional test,
 backbone, dataset, benchmark, and PyYAML dependencies brings 19 more tests
-into scope, for 177 total (see `tests/test_docs_match_test_count.py`,
+into scope, for 182 total (see `tests/test_docs_match_test_count.py`,
 which fails CI if this number ever drifts from reality).
 
 Read `README.md` and `operations/CAUREN_CORE_AGENT_ARCHITECTURE.md`

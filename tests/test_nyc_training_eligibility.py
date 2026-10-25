@@ -177,6 +177,36 @@ def test_cauren_trainer_refuses_nyc_dataset_without_passing_audit(tmp_path: Path
         require_nyc_training_eligibility(tmp_path)
 
 
+def test_nyc_training_refuses_missing_summary_in_canonical_dataset_path(tmp_path: Path):
+    dataset = tmp_path / "cauren_civil_nyc" / "normalized"
+    dataset.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="dataset_summary.json is missing"):
+        require_nyc_training_eligibility(dataset)
+
+
+def test_nyc_training_refuses_misidentified_summary_with_nyc_audit_inputs(tmp_path: Path):
+    dataset = tmp_path / "copied_dataset"
+    _make_dataset(
+        dataset,
+        temporal_status="dated_events_filtered_to_anchor_static_source_fields_unversioned",
+        hazard_vintage="2021-10-13",
+        review_count=0,
+    )
+    summary = json.loads((dataset / "dataset_summary.json").read_text(encoding="utf-8"))
+    summary["dataset_id"] = "unrelated_dataset"
+    (dataset / "dataset_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not identify an NYC cohort"):
+        require_nyc_training_eligibility(dataset)
+
+
+def test_ordinary_dataset_without_nyc_identity_keeps_legacy_behavior(tmp_path: Path):
+    dataset = tmp_path / "ordinary_dataset"
+
+    require_nyc_training_eligibility(dataset)
+
+
 def test_direct_trainer_accepts_only_a_current_passing_nyc_audit(tmp_path: Path):
     dataset = tmp_path / "nyc_dataset"
     _make_dataset(

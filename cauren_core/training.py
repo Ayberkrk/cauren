@@ -28,12 +28,30 @@ def require_nyc_training_eligibility(dataset_dir: Path) -> None:
     dataset summary so rebuilding the cohort invalidates any previous pass.
     """
     summary_path = dataset_dir / "dataset_summary.json"
-    if not summary_path.exists():
+    # The summary is produced by the NYC builder, but it is itself part of
+    # the dataset and can be lost or edited when a cohort is copied. Treat the
+    # canonical output path and the NYC audit input bundle as independent
+    # identity signals so deleting/mislabeling the summary cannot disable the
+    # human-review and point-in-time gate.
+    nyc_path = any(part.lower().startswith("cauren_civil_nyc") for part in dataset_dir.parts)
+    nyc_audit_inputs = all(
+        (dataset_dir / name).is_file()
+        for name in ("label_ledger.csv", "features.csv", "certificates.csv", "linkage_review_queue.csv")
+    )
+    summary = None
+    summary_bytes = None
+    if summary_path.is_file():
+        summary_bytes = summary_path.read_bytes()
+        summary = json.loads(summary_bytes.decode("utf-8"))
+    is_nyc_dataset = nyc_path or nyc_audit_inputs or (
+        summary is not None and str(summary.get("dataset_id", "")).startswith("cauren_civil_nyc_")
+    )
+    if not is_nyc_dataset:
         return
-    summary_bytes = summary_path.read_bytes()
-    summary = json.loads(summary_bytes.decode("utf-8"))
+    if summary_bytes is None:
+        raise ValueError("NYC civil training is blocked: dataset_summary.json is missing; rebuild and audit the dataset first.")
     if not str(summary.get("dataset_id", "")).startswith("cauren_civil_nyc_"):
-        return
+        raise ValueError("NYC civil training is blocked: dataset_summary.json does not identify an NYC cohort.")
     eligibility_path = dataset_dir / "modeling_eligibility.json"
     if not eligibility_path.exists():
         raise ValueError(

@@ -62,3 +62,33 @@ def test_existing_volume_directory_mode_is_preserved(tmp_path, monkeypatch):
     assert stat.S_IMODE(volume.stat().st_mode) == 0o750
     assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
     assert read_history(asset_id="a1")[0]["result"] == {"risk_score": 0.5}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX symlink and mode semantics are required")
+def test_history_rejects_symlink_without_mutating_target(tmp_path, monkeypatch):
+    target = tmp_path / "unrelated.sqlite3"
+    with sqlite3.connect(target) as connection:
+        connection.execute("CREATE TABLE unrelated (value TEXT)")
+    os.chmod(target, 0o644)
+    symlink = tmp_path / "history.sqlite3"
+    symlink.symlink_to(target)
+    monkeypatch.setenv("CAUREN_HISTORY_DB", str(symlink))
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        persist_history(asset_id="a1", kind="diagnose", result={"risk_score": 0.5})
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    with sqlite3.connect(target) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert tables == {"unrelated"}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory mode bits are not portable")
+def test_history_rejects_group_or_world_writable_parent(tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o777)
+    os.chmod(shared, 0o777)
+    monkeypatch.setenv("CAUREN_HISTORY_DB", str(shared / "history.sqlite3"))
+
+    with pytest.raises(ValueError, match="must not be group- or world-writable"):
+        persist_history(asset_id="a1", kind="diagnose", result={"risk_score": 0.5})
