@@ -13,7 +13,10 @@ from api.app import app
 
 
 @pytest.fixture()
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAUREN_HISTORY_DB", str(tmp_path / "history.sqlite3"))
+    monkeypatch.setenv("CAUREN_HISTORY_RETENTION_DAYS", "90")
+    monkeypatch.delenv("CAUREN_API_KEY", raising=False)
     with TestClient(app) as c:
         yield c
 
@@ -70,13 +73,27 @@ def test_health_endpoints_are_available(client):
 
 
 def test_all_routes_are_reachable_with_no_authentication(client):
-    """This API ships with no auth layer: it's a research prototype meant to
-    run locally or behind whatever the operator puts in front of it, not a
-    multi-tenant service with its own access control. A plain request with
-    no headers must succeed.
-    """
+    """Auth is optional for local use and enabled with CAUREN_API_KEY."""
     resp = client.get("/agents")
     assert resp.status_code == 200
+
+
+def test_bearer_auth_is_required_when_api_key_is_configured(client, monkeypatch):
+    monkeypatch.setenv("CAUREN_API_KEY", "local-test-secret")
+    assert client.get("/agents").status_code == 401
+    assert client.get("/agents", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/agents", headers={"Authorization": "Bearer local-test-secret"}).status_code == 200
+    assert client.get("/health/liveness").status_code == 200
+
+
+def test_request_body_limit_returns_413(client):
+    response = client.post("/diagnose", content=b" " * (1_048_576 + 1), headers={"content-type": "application/json"})
+    assert response.status_code == 413
+
+
+def test_sensor_row_limit_is_validated(client):
+    response = client.post("/diagnose", json={"sensors": [{}] * 8193})
+    assert response.status_code == 422
 
 
 def test_agents_route_is_single_civil_agent(client):
@@ -168,6 +185,20 @@ def test_diagnose_building_payload_forces_civil_agent(client):
     body = resp.json()
     assert body["selected_agent"] == "cauren-civil"
     assert body["meta"]["cbs_building_payload"] is True
+    assert "occupancy_safety_score" in body["meta"]["cbs_missing_features"]
+    assert body["meta"]["cbs_feature_sources"]["permit_status_score"] == "project_permit"
+
+
+def test_diagnosis_is_available_in_local_history(client):
+    response = client.post("/diagnose", json=_sensor_payload("history-asset"))
+    assert response.status_code == 200
+    history = client.get("/history/history-asset")
+    assert history.status_code == 200
+    body = history.json()
+    assert body["asset_id"] == "history-asset"
+    assert len(body["records"]) == 1
+    assert body["records"][0]["kind"] == "diagnose"
+    assert body["records"][0]["result"]["selected_agent"] == "cauren-civil"
 
 
 def test_diagnose_defaults_asset_id_and_timestamp_when_omitted(client):

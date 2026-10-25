@@ -1,8 +1,13 @@
 services:
   api:
     build: .
+    environment:
+      CAUREN_HISTORY_DB: /data/history.sqlite3
+      CAUREN_API_KEY: ${CAUREN_API_KEY:-}
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - cauren_history:/data
     healthcheck:
       test:
         - CMD
@@ -13,3 +18,6 @@ services:
       timeout: 3s
       retries: 12
       start_period: 30s
+
+volumes:
+  cauren_history:

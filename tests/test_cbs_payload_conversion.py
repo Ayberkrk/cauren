@@ -21,7 +21,10 @@ from api.app import (
 
 
 @pytest.fixture()
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAUREN_HISTORY_DB", str(tmp_path / "history.sqlite3"))
+    monkeypatch.setenv("CAUREN_HISTORY_RETENTION_DAYS", "90")
+    monkeypatch.delenv("CAUREN_API_KEY", raising=False)
     with TestClient(app) as c:
         yield c
 
@@ -67,13 +70,13 @@ def test_score_from_mapping_falls_back_through_alias_chain():
     assert value == 0.44
 
 
-def test_score_from_mapping_returns_default_when_no_key_matches():
-    assert _score_from_mapping({"unrelated": 1.0}, ("a", "b"), 0.42) == 0.42
+def test_score_from_mapping_returns_missing_when_no_key_matches():
+    assert _score_from_mapping({"unrelated": 1.0}, ("a", "b")) is None
 
 
-def test_score_from_mapping_returns_default_when_not_a_dict():
-    assert _score_from_mapping(None, ("a",), 0.5) == 0.5
-    assert _score_from_mapping("not-a-dict", ("a",), 0.5) == 0.5
+def test_score_from_mapping_returns_missing_when_not_a_dict():
+    assert _score_from_mapping(None, ("a",)) is None
+    assert _score_from_mapping("not-a-dict", ("a",)) is None
 
 
 def test_score_from_mapping_maps_booleans_to_one_or_zero():
@@ -86,8 +89,8 @@ def test_score_from_mapping_clamps_out_of_range_values():
     assert _score_from_mapping({"score": -3.0}, ("score",), 0.0) == 0.0
 
 
-def test_score_from_mapping_falls_back_on_unparseable_value():
-    assert _score_from_mapping({"score": "not-a-number"}, ("score",), 0.33) == 0.33
+def test_score_from_mapping_skips_unparseable_value_and_returns_missing():
+    assert _score_from_mapping({"score": "not-a-number"}, ("score",)) is None
 
 
 def test_score_from_mapping_skips_non_finite_values():
@@ -106,9 +109,9 @@ def test_inspection_score_picks_max_across_items_and_key_aliases():
     assert _inspection_score(items) == 0.9
 
 
-def test_inspection_score_default_when_empty_or_missing():
-    assert _inspection_score([]) == 0.2
-    assert _inspection_score(None) == 0.2
+def test_inspection_score_missing_when_empty_or_missing():
+    assert _inspection_score([]) is None
+    assert _inspection_score(None) is None
 
 
 def test_inspection_score_ignores_non_dict_items():
@@ -132,8 +135,7 @@ def test_building_sensors_from_full_cbs_record_match_expected_values():
     assert values["construction_progress_pct"] == 82.0
     assert values["infrastructure_connection_score"] == 0.45
     assert values["natural_hazard_score"] == 0.65
-    # occupancy_safety_score has no matching key in risk_assessments here.
-    assert values["occupancy_safety_score"] == 0.2
+    assert "occupancy_safety_score" not in values
     assert values["ground_stability_score"] == 0.52
 
 
@@ -144,17 +146,9 @@ def test_construction_progress_pct_accepts_fractional_and_percentage_inputs():
         assert values["construction_progress_pct"] == expected
 
 
-def test_building_sensors_use_documented_defaults_when_subdicts_are_missing():
+def test_building_sensors_leave_missing_features_unobserved():
     payload = DiagnoseIn(building_id="b1")
-    values = _sensor_values(payload)
-    assert values["structural_risk_score"] == 0.25
-    assert values["inspection_finding_score"] == 0.2
-    assert values["permit_status_score"] == 0.5
-    assert values["construction_progress_pct"] == 0.0
-    assert values["infrastructure_connection_score"] == 0.5
-    assert values["natural_hazard_score"] == 0.2
-    assert values["occupancy_safety_score"] == 0.2
-    assert values["ground_stability_score"] == 0.2
+    assert _building_sensors_from_payload(payload) == []
 
 
 def test_building_sensors_alias_keys_resolve_to_canonical_names():
@@ -184,17 +178,20 @@ def test_building_sensors_boolean_permit_and_infrastructure_fields():
     assert values["infrastructure_connection_score"] == 0.0
 
 
-def test_building_sensors_sensor_id_and_unit_shape():
-    payload = DiagnoseIn(building_id="tower-7")
+def test_building_sensors_only_include_observed_fields_and_source_metadata():
+    payload = DiagnoseIn(building_id="tower-7", construction_status={"progress_pct": 51})
     rows = _building_sensors_from_payload(payload)
     by_name = {row["name"]: row for row in rows}
 
-    assert len(rows) == 8
-    for name, row in by_name.items():
-        assert row["sensor_id"] == f"tower-7_{name}"
-        expected_unit = "%" if name == "construction_progress_pct" else "ratio"
-        assert row["unit"] == expected_unit
-        assert row["quality"] is True
+    assert list(by_name) == ["construction_progress_pct"]
+    row = by_name["construction_progress_pct"]
+    assert row["sensor_id"] == "tower-7_construction_progress_pct"
+    assert row["unit"] == "%"
+    assert row["metadata"] == {
+        "source": "cbs_payload",
+        "source_section": "construction_status",
+        "observed": True,
+    }
 
 
 # ---------------------------------------------------------------------------
