@@ -5,7 +5,20 @@ import statistics
 
 from .backbone import CaurenHybridBackbone, HybridBackboneUnavailable
 from .contracts import CoreOutput, SensorWindow
-from .risk_calibration import calibrated_core_risk, risk_profile
+from .risk_calibration import (
+    HOLM_ALPHA,
+    chi2_lower_p,
+    holm_adjust,
+    max_abs_t_p,
+    p_value_to_risk,
+    risk_profile,
+    student_t_two_sided_p,
+)
+
+NO_REFERENCE_CONFIDENCE_FACTOR = 0.6
+# Pattern scores that are computed against the per-asset reference when one
+# is supplied (see _reference_tests).
+REFERENCE_TESTED_PATTERNS = ("drift", "spike", "dip", "level_shift", "flatline")
 
 
 class CaurenCoreRuntime:
@@ -362,7 +375,6 @@ class CaurenCoreRuntime:
             "contextual_anomaly": min(1.0, contextual_score),
             "seasonal_deviation": min(1.0, seasonal_score),
         }
-        raw_anomaly_type = max(raw_scores.items(), key=lambda item: item[1])[0]
         weighted_scores = {
             key: max(0.0, min(1.0, float(value) * float(profile.pattern_weights.get(key, 1.0))))
             for key, value in raw_scores.items()
@@ -373,38 +385,43 @@ class CaurenCoreRuntime:
                 min(1.0, calibration_bias_baseline),
             )
         anomaly_type = max(weighted_scores.items(), key=lambda item: item[1])[0]
-        top_score = float(weighted_scores[anomaly_type])
-        if top_score < 0.08 and reconstruction_error < 0.08:
+        if float(weighted_scores[anomaly_type]) < 0.08 and reconstruction_error < 0.08:
             anomaly_type = "nominal_variation"
-            anomaly_family = "normal_pattern"
-        elif anomaly_type in {"drift", "slow_degradation"}:
-            anomaly_family = "progressive_deviation"
-        elif anomaly_type in {"spike", "dip", "repeating_burst"}:
-            anomaly_family = "transient_deviation"
-        elif anomaly_type == "oscillation":
-            anomaly_family = "cyclic_instability"
-        elif anomaly_type in {"level_shift", "variance_change"}:
-            anomaly_family = "change_point_deviation"
-        elif anomaly_type in {"flatline", "sensor_dropout", "calibration_bias"}:
-            anomaly_family = "sensor_integrity_deviation"
-        elif anomaly_type in {"correlation_break", "multisensor_residual", "collective_anomaly"}:
-            anomaly_family = "multisensor_relation_deviation"
-        elif anomaly_type in {"contextual_anomaly", "seasonal_deviation"}:
-            anomaly_family = "contextual_deviation"
-        else:
-            anomaly_family = "unknown_family"
 
-        raw_risk_score, risk_score = calibrated_core_risk(
-            agent_id=str(context.get("selected_agent_id") or ""),
-            raw_scores=raw_scores,
-            anomaly_type=anomaly_type if anomaly_type != "nominal_variation" else raw_anomaly_type,
-            reconstruction_error=reconstruction_error,
-        )
-        if anomaly_family == "normal_pattern":
-            raw_risk_score = min(raw_risk_score, 0.18)
-            risk_score = min(risk_score, 0.12)
+        baselines = context.get("feature_baselines") or {}
+        if baselines:
+            # Reference-tested patterns replace their window-relative shape
+            # scores with Holm-corrected evidence against the asset's own
+            # reference, mapped so the sector threshold still means
+            # "significant at the family-wise alpha". The other pattern
+            # scores stay as window-relative shape descriptors and do not
+            # drive risk.
+            evidence = _reference_evidence(window, mask, baselines, str(context.get("selected_agent_id") or ""))
+            for pattern in REFERENCE_TESTED_PATTERNS:
+                raw_scores[pattern] = float(evidence["pattern_risk"].get(pattern, 0.0))
+            raw_scores["slow_degradation"] = 0.75 * raw_scores["drift"]
+            risk_score = float(evidence["risk"])
+            raw_risk_score = risk_score
+            anomaly_type = evidence["strongest"]["pattern"] if evidence["significant"] else "nominal_variation"
+            evidence_status = "reference_tested"
+        else:
+            # Without a reference there is nothing to measure a change
+            # against: a window-relative score cannot tell a large change
+            # from a small one, or a stuck sensor from a feature that is
+            # constant by nature. Keep the shape label as a description but
+            # report insufficient evidence instead of raising an alarm.
+            risk_score = 0.0
+            raw_risk_score = 0.0
+            evidence_status = "insufficient_reference"
+        anomaly_family = _anomaly_family(anomaly_type)
+
         mask_true = sum(1 for row in mask for item in row if item)
         confidence = min(1.0, 0.35 + 0.45 * float(mask_true) / float(max(1, mask_size)) + 0.20 * risk_score)
+        if not context.get("feature_baselines"):
+            # Without a per-asset reference every score above is relative to
+            # this window alone, which cannot tell a large change from a
+            # small one. Say so in the confidence rather than in the label.
+            confidence *= NO_REFERENCE_CONFIDENCE_FACTOR
         return CoreOutput(
             anomaly_type=anomaly_type,
             anomaly_family=anomaly_family,
@@ -419,7 +436,28 @@ class CaurenCoreRuntime:
             raw_risk_score=float(raw_risk_score),
             calibrated_risk_score=float(risk_score),
             backbone_metadata=dict(backbone_metadata),
+            evidence_status=evidence_status,
         )
+
+
+def _anomaly_family(anomaly_type: str) -> str:
+    if anomaly_type == "nominal_variation":
+        return "normal_pattern"
+    if anomaly_type in {"drift", "slow_degradation"}:
+        return "progressive_deviation"
+    if anomaly_type in {"spike", "dip", "repeating_burst"}:
+        return "transient_deviation"
+    if anomaly_type == "oscillation":
+        return "cyclic_instability"
+    if anomaly_type in {"level_shift", "variance_change"}:
+        return "change_point_deviation"
+    if anomaly_type in {"flatline", "sensor_dropout", "calibration_bias"}:
+        return "sensor_integrity_deviation"
+    if anomaly_type in {"correlation_break", "multisensor_residual", "collective_anomaly"}:
+        return "multisensor_relation_deviation"
+    if anomaly_type in {"contextual_anomaly", "seasonal_deviation"}:
+        return "contextual_deviation"
+    return "unknown_family"
 
 
 def _percentile(values: list[float], pct: int) -> float:
@@ -503,6 +541,8 @@ def _baseline_delta_score(window: SensorWindow, mask: list[list[bool]], context:
         if idx >= len(mask[0]):
             break
         baseline_value = baseline_map.get(feature.name)
+        if isinstance(baseline_value, dict):
+            baseline_value = baseline_value.get("center")
         try:
             baseline = float(baseline_value)
         except (TypeError, ValueError):
@@ -650,3 +690,183 @@ def _linear_slope(x_values: list[float], y_values: list[float]) -> float:
         return 0.0
     numer = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_values, y_values))
     return float(numer / denom)
+
+
+# ---------------------------------------------------------------------------
+# Reference-based tests. Each returns a two-sided tail p-value under the null
+# "this window is independent noise around the asset's reference center with
+# the reference scale", so evidence is measured in the asset's own units of
+# normal variation rather than in the window's own spread.
+# ---------------------------------------------------------------------------
+
+# Asymptotic variance of a sample median relative to the mean, for normal data.
+_MEDIAN_VARIANCE_FACTOR = math.pi / 2.0
+# Asymptotic efficiency of the Theil-Sen slope relative to least squares for
+# normal errors; its null spread is the least-squares one inflated by 1/sqrt.
+_THEIL_SEN_EFFICIENCY = 0.91
+# Asymptotic efficiency of the MAD as a scale estimate for normal data.
+_MAD_EFFICIENCY = 0.37
+# A feature that is expected to vary but moves less than this fraction of its
+# reference scale over the window is treated as a flatline candidate.
+_FLATLINE_SCALE_FRACTION = 0.1
+_MIN_SPIKE_SAMPLES = 3
+_REFERENCE_LEVEL = "reference_level"
+_MIN_DRIFT_SAMPLES = 5
+_MIN_STEP_SAMPLES = 8
+
+
+def _theil_sen_slope(x_values: list[float], y_values: list[float]) -> float:
+    slopes = [
+        (y_values[j] - y_values[i]) / (x_values[j] - x_values[i])
+        for i in range(len(x_values))
+        for j in range(i + 1, len(x_values))
+        if x_values[j] != x_values[i]
+    ]
+    return float(statistics.median(slopes)) if slopes else 0.0
+
+
+def _trend_shape(x_values: list[float], y_values: list[float]) -> str:
+    """Whether a straight line or a two-level step fits this window better.
+
+    Over a short window a ramp also moves the half-window medians and a step
+    also tilts the slope, so both tests tend to fire together; the residual
+    sum of squares of the two fitted shapes decides which one names it.
+    """
+    n = len(y_values)
+    slope = _linear_slope(x_values, y_values)
+    x_mean = sum(x_values) / float(n)
+    y_mean = sum(y_values) / float(n)
+    line_rss = sum((y - (y_mean + slope * (x - x_mean))) ** 2 for x, y in zip(x_values, y_values))
+    half = n // 2
+    step_rss = 0.0
+    for part in (y_values[:half], y_values[half:]):
+        part_mean = sum(part) / float(len(part))
+        step_rss += sum((y - part_mean) ** 2 for y in part)
+    return "level_shift" if step_rss < line_rss else "drift"
+
+
+def _reference_tests(x_values: list[float], y_values: list[float], baseline: dict) -> list[tuple[str, float, float]]:
+    """Run every applicable test for one feature.
+
+    Returns (pattern, p_value, effect_in_scales) triples. Pattern names are
+    the existing pattern_scores keys, except _REFERENCE_LEVEL, which scores
+    as level_shift but does not name the anomaly when a shape test (spike,
+    step, drift, flatline) is also significant: a drifting or stepping
+    window also sits away from the reference on average, and the shape is
+    the more specific description.
+    """
+    n = len(y_values)
+    if n < _MIN_SPIKE_SAMPLES:
+        return []
+    center = float(baseline["center"])
+    scale = float(baseline["scale"])
+    reference_n = max(2, int(baseline.get("n") or 0))
+    # The reference is itself an estimate. Its scale (a MAD) carries about
+    # 37% of a standard deviation's information, so tails come from Student's
+    # t with that many effective degrees of freedom instead of the normal;
+    # its center (a median) adds pi / (2 n) of variance to the level test.
+    dof = max(1.0, _MAD_EFFICIENCY * (reference_n - 1))
+    tests: list[tuple[str, float, float]] = []
+
+    # Spike / dip: the most extreme sample relative to the window's own
+    # robust level, in reference scales. Sidak over the n samples. A sample's
+    # distance from the window median varies about (1 + 1/n) times as much as
+    # its distance from the true center; without that inflation the far tail
+    # that Holm relies on is roughly 1.6x too optimistic for n = 16.
+    level = float(statistics.median(y_values))
+    deviations = [value - level for value in y_values]
+    extreme = max(deviations, key=abs)
+    spike_z = abs(extreme) / (scale * math.sqrt(1.0 + 1.0 / n))
+    tests.append(("spike" if extreme >= 0.0 else "dip", max_abs_t_p(spike_z, n, dof), extreme / scale))
+
+    # Level: how far the whole window sits from the reference center.
+    mean_offset = sum(y_values) / float(n) - center
+    level_sd = scale * math.sqrt(1.0 / n + _MEDIAN_VARIANCE_FACTOR / reference_n)
+    tests.append((_REFERENCE_LEVEL, student_t_two_sided_p(mean_offset / level_sd, dof), mean_offset / scale))
+
+    # Step: change of the median between the two halves of the window.
+    if n >= _MIN_STEP_SAMPLES:
+        half = n // 2
+        left, right = y_values[:half], y_values[half:]
+        step = float(statistics.median(right)) - float(statistics.median(left))
+        step_sd = scale * math.sqrt(_MEDIAN_VARIANCE_FACTOR * (1.0 / len(left) + 1.0 / len(right)))
+        tests.append(("level_shift", student_t_two_sided_p(step / step_sd, dof), step / scale))
+
+    # Drift: Theil-Sen slope times the observed span.
+    if n >= _MIN_DRIFT_SAMPLES:
+        x_mean = sum(x_values) / float(n)
+        sxx = sum((x - x_mean) ** 2 for x in x_values)
+        span = max(x_values) - min(x_values)
+        if sxx > 0.0 and span > 0.0:
+            change = _theil_sen_slope(x_values, y_values) * span
+            change_sd = scale * span / math.sqrt(sxx * _THEIL_SEN_EFFICIENCY)
+            tests.append(("drift", student_t_two_sided_p(change / change_sd, dof), change / scale))
+
+    # Flatline: only for a feature the reference says should vary. Under the
+    # null, (n - 1) s^2 / scale^2 is chi-square with n - 1 degrees of freedom.
+    if baseline.get("expected_variation", True):
+        spread = float(statistics.pstdev(y_values))
+        if spread < _FLATLINE_SCALE_FRACTION * scale:
+            tests.append(("flatline", chi2_lower_p(n * spread * spread / (scale * scale), n - 1), spread / scale))
+    return tests
+
+
+def _reference_evidence(
+    window: SensorWindow,
+    mask: list[list[bool]],
+    baselines: dict,
+    agent_id: str,
+) -> dict:
+    """Holm-corrected evidence over every feature that has a reference."""
+    labels: list[tuple[str, str, float]] = []
+    p_values: list[float] = []
+    trend_shapes: dict[str, str] = {}
+    for idx, feature in enumerate(window.features):
+        baseline = baselines.get(feature.name)
+        if not baseline or idx >= len(mask[0]):
+            continue
+        x_values = [float(row_idx) for row_idx in range(len(window.matrix)) if mask[row_idx][idx]]
+        y_values = [float(window.matrix[row_idx][idx]) for row_idx in range(len(window.matrix)) if mask[row_idx][idx]]
+        for pattern, p_value, effect in _reference_tests(x_values, y_values, baseline):
+            labels.append((feature.name, pattern, effect))
+            p_values.append(p_value)
+        if len(y_values) >= _MIN_STEP_SAMPLES:
+            trend_shapes[feature.name] = _trend_shape(x_values, y_values)
+    adjusted = holm_adjust(p_values)
+    pattern_risk: dict[str, float] = {}
+    strongest = None
+    strongest_shape = None
+    for (feature_name, pattern, effect), p_adj in zip(labels, adjusted):
+        risk = p_value_to_risk(p_adj, agent_id=agent_id)
+        key = "level_shift" if pattern == _REFERENCE_LEVEL else pattern
+        pattern_risk[key] = max(pattern_risk.get(key, 0.0), risk)
+        candidate = {"feature": feature_name, "pattern": key, "adjusted_p": p_adj, "effect_in_scales": effect}
+        if strongest is None or p_adj < strongest["adjusted_p"]:
+            strongest = candidate
+        if pattern != _REFERENCE_LEVEL and (strongest_shape is None or p_adj < strongest_shape["adjusted_p"]):
+            strongest_shape = candidate
+    if strongest_shape is not None and strongest_shape["adjusted_p"] <= HOLM_ALPHA:
+        strongest = strongest_shape
+        trend_patterns = {"drift", "level_shift"}
+        preferred = trend_shapes.get(strongest["feature"])
+        if strongest["pattern"] in trend_patterns and preferred and preferred != strongest["pattern"]:
+            alternative = min(
+                (
+                    {"feature": name, "pattern": pattern, "adjusted_p": p_adj, "effect_in_scales": effect}
+                    for (name, pattern, effect), p_adj in zip(labels, adjusted)
+                    if name == strongest["feature"] and pattern == preferred
+                ),
+                key=lambda item: item["adjusted_p"],
+                default=None,
+            )
+            if alternative is not None and alternative["adjusted_p"] <= HOLM_ALPHA:
+                strongest = alternative
+    min_adjusted = min(adjusted, default=1.0)
+    return {
+        "test_count": len(p_values),
+        "min_adjusted_p": min_adjusted,
+        "risk": p_value_to_risk(min_adjusted, agent_id=agent_id),
+        "pattern_risk": pattern_risk,
+        "strongest": strongest,
+        "significant": min_adjusted <= HOLM_ALPHA,
+    }

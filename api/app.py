@@ -27,7 +27,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from .history import persist_history, read_history
+from cauren_core.baseline import MIN_REFERENCE_SAMPLES, fit_feature_baseline, parse_baselines
+
+from .history import persist_history, read_baseline, read_history, store_baseline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cauren_civil_api")
@@ -164,6 +166,9 @@ class DiagnoseIn(BaseModel):
     sector_hint_confidence: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
     oma_frequency_drift: Optional[Dict[str, Any]] = None
+    # Per-asset reference: {feature: {center, scale, n, expected_variation,
+    # unit}}. Overrides a baseline stored with POST /baseline/{asset_id}.
+    baseline: Optional[Dict[str, Dict[str, Any]]] = None
     # CBS ("bina/insaat" GIS) fields. When `sensors` is not supplied, only
     # features supported by observed source values are converted into readings.
     building_id: Optional[str] = None
@@ -175,6 +180,19 @@ class DiagnoseIn(BaseModel):
     infrastructure_connections: Optional[Dict[str, Any]] = None
     risk_assessments: Optional[Dict[str, Any]] = None
     inspection_findings: Optional[List[Dict[str, Any]]] = None
+
+
+class BaselineFitIn(BaseModel):
+    agent_id: Optional[str] = None
+    sector: Optional[str] = None
+    # A reference window in the same row format as /diagnose. Every reading
+    # needs a timestamp so repeated readings of a feature stay separate.
+    sensors: List[Dict[str, Any]] = Field(max_length=MAX_SENSOR_ROWS)
+    # Floor for a feature's scale, e.g. its measurement resolution. Required
+    # for a feature that never varies in the reference window.
+    min_scale: Optional[Dict[str, float]] = None
+    # Override the inferred "does this feature normally vary" flag.
+    expected_variation: Optional[Dict[str, bool]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +471,57 @@ def _sync_calibrate(payload: CalibrateIn) -> dict:
         raise HTTPException(status_code=500, detail="calibration could not be processed") from exc
 
 
+def _resolve_baseline(payload: DiagnoseIn, asset_id: str) -> dict[str, Any]:
+    """Reference resolution order: request payload, then the baseline stored
+    for an explicitly named asset, then none (the core falls back to the
+    window itself and reports reference "none")."""
+    if payload.baseline:
+        return {"baseline": payload.baseline, "baseline_source": "payload"}
+    if payload.asset_id:
+        stored = read_baseline(asset_id=asset_id)
+        if stored and stored["features"]:
+            return {"baseline": stored["features"], "baseline_source": "stored"}
+    return {"baseline": None, "baseline_source": "none"}
+
+
+def _sync_fit_baseline(asset_id: str, payload: BaselineFitIn) -> dict:
+    if any(row.get("timestamp") is None for row in payload.sensors if isinstance(row, dict)):
+        raise HTTPException(status_code=422, detail="every reference reading needs a timestamp")
+    agent_id, values, units = _get_cauren_pipeline().reference_values(
+        {"agent_id": payload.agent_id, "sector": payload.sector, "sensors": payload.sensors}
+    )
+    fitted: dict[str, dict[str, Any]] = {}
+    skipped: dict[str, str] = {}
+    for feature, observed in sorted(values.items()):
+        try:
+            fitted[feature] = fit_feature_baseline(
+                observed,
+                unit=units.get(feature, ""),
+                expected_variation=(payload.expected_variation or {}).get(feature),
+                min_scale=(payload.min_scale or {}).get(feature),
+            ).to_dict()
+        except ValueError as exc:
+            skipped[feature] = str(exc)
+    if not fitted:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": f"no feature had a usable reference window (at least {MIN_REFERENCE_SAMPLES} samples)",
+                "skipped": skipped,
+            },
+        )
+    fitted_at = time.time()
+    store_baseline(asset_id=asset_id, agent_id=agent_id, baselines=fitted, fitted_at=fitted_at)
+    return {
+        "asset_id": asset_id,
+        "agent_id": agent_id,
+        "fitted_at": fitted_at,
+        "features": fitted,
+        "skipped": skipped,
+        "method": "median and MAD x 1.4826 (mean absolute deviation when MAD is zero)",
+    }
+
+
 def _sync_diagnose(payload: DiagnoseIn, explain: bool) -> dict:
     t0 = time.perf_counter()
     try:
@@ -487,6 +556,7 @@ def _sync_diagnose(payload: DiagnoseIn, explain: bool) -> dict:
             "machine_id": payload.machine_id,
             "oma_frequency_drift": payload.oma_frequency_drift or {},
         }
+        cauren_payload.update(_resolve_baseline(payload, asset_id))
         result = _get_cauren_pipeline().diagnose(cauren_payload)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         body = result.to_dict()
@@ -593,6 +663,25 @@ def get_asset_history(asset_id: str, limit: int = Query(default=100, ge=1, le=10
     return {"asset_id": asset_id, "records": read_history(asset_id=asset_id, limit=limit)}
 
 
+@app.get("/baseline/{asset_id}")
+def get_asset_baseline(asset_id: str):
+    if not ASSET_ID_PATTERN.fullmatch(asset_id):
+        raise HTTPException(status_code=422, detail="asset_id must match [a-zA-Z0-9_-]{1,64}")
+    stored = read_baseline(asset_id=asset_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="no baseline stored for this asset")
+    return stored
+
+
+@app.post("/baseline/{asset_id}")
+async def fit_asset_baseline(asset_id: str, payload: BaselineFitIn):
+    if not ASSET_ID_PATTERN.fullmatch(asset_id):
+        raise HTTPException(status_code=422, detail="asset_id must match [a-zA-Z0-9_-]{1,64}")
+    if not payload.sensors:
+        raise HTTPException(status_code=422, detail="sensors is required")
+    return await run_in_threadpool(_sync_fit_baseline, asset_id, payload)
+
+
 @app.post("/calibrate")
 async def calibrate(payload: CalibrateIn):
     if not payload.sensors:
@@ -617,6 +706,10 @@ async def diagnose(payload: DiagnoseIn, explain: bool = False):
     if not payload.sensors and not str(payload.building_id or "").strip():
         raise HTTPException(status_code=422, detail="either sensors or a CBS building_id payload is required")
     _validate_oma_frequency_drift(payload.oma_frequency_drift)
+    try:
+        parse_baselines(payload.baseline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await run_in_threadpool(_sync_diagnose, payload, explain)
 
 

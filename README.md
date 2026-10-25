@@ -160,9 +160,18 @@ This project is a working research prototype, not a finished product.
 
 - **`cauren-civil` has no pretrained model yet.**
   `cauren_core/checkpoints/` ships without one for it. Out of the box,
-  the anomaly-detection core runs on its statistical fallback
-  (median/spread-based calibration and pattern-shape scoring), not a
+  the anomaly-detection core runs on its statistical fallback, not a
   trained neural backbone.
+- **The statistical core needs a per-asset reference to raise an alarm.**
+  With a `baseline` (in the request or stored with
+  `POST /baseline/{asset_id}`), each feature is tested against the asset's
+  own center and scale for spikes, steps, drift, level offset, and
+  flatline, and all tests of a diagnosis are Holm-corrected at a 5%
+  family-wise rate; the 0.34 threshold corresponds to that rate. Without a
+  reference the window can only be compared with itself, so the core
+  reports `insufficient_validated_evidence` with risk 0 instead of
+  alarming. The tests assume independent noise around the reference;
+  autocorrelated or seasonal records will alarm more often than 5%.
 - **A single-snapshot request has no time series to analyze.** If you
   send one reading per feature with no history, the core reports
   `insufficient_temporal_history` / `snapshot_only` instead of a
@@ -204,6 +213,36 @@ the hybrid has lower ECE. Strict leave-one-state-out refits showed uneven
 transfer, so no new probability is exposed through the API. Protocol, state
 results, uncertainty intervals, and reproduction steps are in
 [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
+
+### KW51 bridge modal monitoring case study
+
+`tools/kw51_study.py` tests modal novelty detection on the KW51 steel railway
+bridge (Maes and Lombaert, Zenodo 3745914, CC BY-NC-SA 4.0; downloaded on
+demand, not committed), whose diagonal connections were strengthened in 2019.
+Detectors are fitted on October 2018 to March 2019. Raw-frequency
+Mahalanobis, temperature-normalized residual Mahalanobis, and PCA residual
+detectors all had 0 of 44 false-alarm days in the spring 2019 holdout and
+alarmed on all post-retrofit days from the first one. The retrofit moved two
+modes by about 2%, which makes this an easy case; a post-hoc subset of the
+three least-shifted modes shows temperature normalization widening the
+detection margin and PCA failing the false-alarm target. Fitted temperature
+slopes are negative for every mode, and the uneven, mixed-sign shifts are
+consistent with a local change. This is a single-bridge case study, not a
+validation. Details are in [docs/kw51-case-study.md](docs/kw51-case-study.md).
+
+### Statistical core benchmark
+
+`tools/benchmark_core_anomaly.py` runs the full diagnosis pipeline on seeded
+synthetic civil windows (clean noise, stuck and naturally constant features,
+drifts, steps, and spikes measured in reference-scale units) and reports
+alarm rates with Wilson 95% intervals. With a reference, the core alarms
+on 1.4% of clean windows, 99.4% of 3 sigma drifts, 100% of 3 sigma steps,
+92.6% of 6 sigma spikes, and 100% of stuck features that should vary, but
+not on features that are constant by nature (2.2%, the clean rate of the
+other seven). The window-normalized core it replaced alarmed on 1.0% to
+5.8% of every one of those single-feature scenarios regardless of
+magnitude. Protocol and results are in
+[docs/core-anomaly-benchmark.md](docs/core-anomaly-benchmark.md).
 
 ### NYC DOB research dataset
 
@@ -289,7 +328,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (163 tests with minimal dependencies; 182 total with optional dependencies) |
+| `tests/` | Test suite (188 tests with minimal dependencies; 226 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -300,6 +339,7 @@ reviewer, not damage verdicts.
 | `GET` | `/health/liveness`, `/health/readiness` | Health checks |
 | `GET` | `/agents` | List registered sector agents |
 | `GET` | `/history/{asset_id}` | Retrieve recent local diagnosis/calibration responses for one asset |
+| `POST`, `GET` | `/baseline/{asset_id}` | Fit (median, MAD x 1.4826) and store, or read, an asset's per-feature reference; only summary statistics are stored |
 | `POST` | `/calibrate` | Normalize/calibrate a sensor payload without running physics |
 | `POST` | `/diagnose` | Full pipeline: route, calibrate, classify, physics, compose. Accepts either a `sensors` list or a CBS-shaped building record (`building_id` + `risk_assessments`/`project_permit`/etc, converted internally) |
 
@@ -339,7 +379,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (182 total with optional dependencies)
+python3 -m pytest tests/            # 188 tests, no network/GPU/numpy/torch required (226 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

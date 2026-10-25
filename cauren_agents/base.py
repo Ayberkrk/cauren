@@ -70,7 +70,9 @@ class SectorAgent:
         confidence = min(1.0, 0.65 * float(core_output.confidence) + 0.35 * float(route.confidence))
         if physics_evidence.risk_contribution > 0.0:
             risk_score_status = "validated_physics_contribution"
-        elif core_output.anomaly_type in {"insufficient_observation", "insufficient_temporal_history"}:
+        elif core_output.anomaly_type in {"insufficient_observation", "insufficient_temporal_history"} or (
+            core_output.evidence_status == "insufficient_reference"
+        ):
             risk_score_status = "insufficient_validated_evidence"
         elif core_output.risk_score > 0.0:
             risk_score_status = "statistical_research_signal"

@@ -138,6 +138,10 @@ class CoreOutput:
     raw_risk_score: float = 0.0
     calibrated_risk_score: float = 0.0
     backbone_metadata: dict[str, Any] = field(default_factory=dict)
+    # "reference_tested" when risk came from tests against a per-asset
+    # reference, "insufficient_reference" when there was none to test
+    # against; empty for outputs that never reached pattern scoring.
+    evidence_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -247,6 +251,7 @@ class CaurenDiagnosis:
                 "spike_score": round(float(self.core_output.spike_score), 6),
                 "oscillation_score": round(float(self.core_output.oscillation_score), 6),
                 "backbone_metadata": dict(self.core_output.backbone_metadata),
+                "evidence_status": self.core_output.evidence_status,
             },
             "feature_names": list(self.feature_names),
             "rejected_samples": list(self.rejected_samples),
