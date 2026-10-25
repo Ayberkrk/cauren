@@ -66,6 +66,22 @@ def _connect() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_diagnosis_history_asset_time "
         "ON diagnosis_history(asset_id, recorded_at DESC)"
     )
+    # Summary statistics only (no reference readings): one row per asset
+    # feature, replaced whenever the asset's baseline is refitted.
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS asset_baselines (
+            asset_id TEXT NOT NULL,
+            feature TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            center REAL NOT NULL,
+            scale REAL NOT NULL,
+            n INTEGER NOT NULL,
+            expected_variation INTEGER NOT NULL,
+            unit TEXT NOT NULL,
+            fitted_at REAL NOT NULL,
+            PRIMARY KEY (asset_id, feature)
+        )"""
+    )
     return connection
 
 
@@ -104,3 +120,63 @@ def read_history(*, asset_id: str, limit: int = 100) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def store_baseline(
+    *,
+    asset_id: str,
+    agent_id: str,
+    baselines: dict[str, dict[str, Any]],
+    fitted_at: float | None = None,
+) -> None:
+    """Replace an asset's stored baseline. Baselines are configuration, so
+    they are not subject to the history retention window."""
+    now = float(fitted_at if fitted_at is not None else time.time())
+    rows = [
+        (
+            asset_id,
+            feature,
+            agent_id,
+            float(item["center"]),
+            float(item["scale"]),
+            int(item["n"]),
+            1 if item.get("expected_variation", True) else 0,
+            str(item.get("unit") or ""),
+            now,
+        )
+        for feature, item in baselines.items()
+    ]
+    with closing(_connect()) as connection:
+        with connection:
+            connection.execute("DELETE FROM asset_baselines WHERE asset_id = ?", (asset_id,))
+            connection.executemany(
+                "INSERT INTO asset_baselines(asset_id, feature, agent_id, center, scale, n, "
+                "expected_variation, unit, fitted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
+
+def read_baseline(*, asset_id: str) -> dict[str, Any] | None:
+    with closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT feature, agent_id, center, scale, n, expected_variation, unit, fitted_at "
+            "FROM asset_baselines WHERE asset_id = ? ORDER BY feature",
+            (asset_id,),
+        ).fetchall()
+    if not rows:
+        return None
+    return {
+        "asset_id": asset_id,
+        "agent_id": rows[0]["agent_id"],
+        "fitted_at": max(row["fitted_at"] for row in rows),
+        "features": {
+            row["feature"]: {
+                "center": row["center"],
+                "scale": row["scale"],
+                "n": row["n"],
+                "expected_variation": bool(row["expected_variation"]),
+                "unit": row["unit"],
+            }
+            for row in rows
+        },
+    }

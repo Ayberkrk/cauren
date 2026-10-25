@@ -313,7 +313,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (163 tests with minimal dependencies; 199 total with optional dependencies) |
+| `tests/` | Test suite (179 tests with minimal dependencies; 215 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -324,6 +324,7 @@ reviewer, not damage verdicts.
 | `GET` | `/health/liveness`, `/health/readiness` | Health checks |
 | `GET` | `/agents` | List registered sector agents |
 | `GET` | `/history/{asset_id}` | Retrieve recent local diagnosis/calibration responses for one asset |
+| `POST`, `GET` | `/baseline/{asset_id}` | Fit (median, MAD x 1.4826) and store, or read, an asset's per-feature reference; only summary statistics are stored |
 | `POST` | `/calibrate` | Normalize/calibrate a sensor payload without running physics |
 | `POST` | `/diagnose` | Full pipeline: route, calibrate, classify, physics, compose. Accepts either a `sensors` list or a CBS-shaped building record (`building_id` + `risk_assessments`/`project_permit`/etc, converted internally) |
 
@@ -363,7 +364,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (199 total with optional dependencies)
+python3 -m pytest tests/            # 179 tests, no network/GPU/numpy/torch required (215 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
