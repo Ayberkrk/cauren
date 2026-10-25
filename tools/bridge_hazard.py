@@ -42,6 +42,14 @@ import pandas as pd
 from tools.build_bridge_years_v4 import CATEGORICAL_FEATURES, MODEL_FEATURES
 
 HORIZON_YEARS = 5
+# Inputs equivalent to the v3 benchmark's expanded boosting tier: the three
+# runtime scores, component condition history and age. Comparing this set with
+# the full v4 set on identical rows isolates the value of the new NBI items.
+CORE_FEATURES = [
+    "structural_risk_score", "ground_stability_score", "natural_hazard_score",
+    "deck_cond", "superstructure_cond", "substructure_cond", "deck_prev", "deck_delta",
+    "years_at_deck_rating", "deck_drops_past", "deck_improvements_past", "age_years",
+]
 # Covariates where higher values should never lower the hazard. Ratings
 # themselves get no constraint: a high rating can drop sooner than a low one.
 MONOTONE_INCREASING = ("age_years", "years_since_reconstruction", "log_adt", "truck_adt")
@@ -146,11 +154,17 @@ def top_features(booster: Any, count: int = 15) -> list[dict[str, float]]:
     return [{"feature": names[i], "gain_share": round(float(gains[i]) / total, 4)} for i in order]
 
 
-def _dataset(lgb: Any, rows: pd.DataFrame, label: str, reference: Any = None) -> Any:
+def _dataset(lgb: Any, rows: pd.DataFrame, label: str, columns: list[str], reference: Any = None) -> Any:
     return lgb.Dataset(
-        rows[feature_columns()], label=rows[label].to_numpy(), categorical_feature=CATEGORICAL_FEATURES,
+        rows[columns], label=rows[label].to_numpy(),
+        categorical_feature=[column for column in CATEGORICAL_FEATURES if column in columns],
         reference=reference, free_raw_data=True,
     )
+
+
+def predict(booster: Any, frame: pd.DataFrame) -> np.ndarray:
+    """Score rows with exactly the columns the booster was trained on."""
+    return booster.predict(frame[booster.feature_name()])
 
 
 def fit_booster(
@@ -159,15 +173,17 @@ def fit_booster(
     label: str,
     *,
     monotone: bool,
+    columns: list[str] | None = None,
     max_rounds: int = 2000,
 ) -> Any:
     lgb = _lgb()
+    columns = columns or feature_columns()
     params = dict(HAZARD_PARAMS)
     if monotone:
-        params["monotone_constraints"] = monotone_vector(feature_columns())
+        params["monotone_constraints"] = monotone_vector(columns)
         params["monotone_constraints_method"] = "advanced"
-    train_set = _dataset(lgb, train, label)
-    valid_set = _dataset(lgb, valid, label, reference=train_set)
+    train_set = _dataset(lgb, train, label, columns)
+    valid_set = _dataset(lgb, valid, label, columns, reference=train_set)
     return lgb.train(
         params, train_set, num_boost_round=max_rounds, valid_sets=[valid_set],
         callbacks=[lgb.early_stopping(100, verbose=False)],
@@ -245,68 +261,72 @@ def run(
             })
             booster.save_model(str(output_dir / f"{name}.txt"))
 
-    # The same v4 covariates in the v3 single-window formulation, trained on
-    # the v3 anchor of every train bridge.
+    # Single-window formulation (one v3 anchor per bridge), fit with the full
+    # v4 covariates and with the v3-equivalent core set on identical rows.
     is_train = windows["split"].eq("train").to_numpy()
     is_valid = windows["split"].eq("validation").to_numpy()
     labels = windows["label"].astype(float).to_numpy()
     train_anchor = anchors[is_train].assign(y=labels[is_train])
     valid_anchor = anchors[is_valid].assign(y=labels[is_valid])
-    for monotone in (False, True):
-        single = fit_booster(train_anchor, valid_anchor, "y", monotone=monotone)
-        name = f"v4_single_window_boosting{'_monotone' if monotone else ''}"
-        record(name, single.predict(anchors[feature_columns()]), {
-            "formulation": "single_window_classification",
-            "monotone_constraints": list(MONOTONE_INCREASING) if monotone else [],
-            "training_windows": int(len(train_anchor)),
-            "best_iteration": int(single.best_iteration),
-            "top_features_by_gain": top_features(single),
-        })
-        single.save_model(str(output_dir / f"{name}.txt"))
+    feature_sets = {"v4": feature_columns(), "core": CORE_FEATURES}
+    for prefix, columns in feature_sets.items():
+        for monotone in (False, True) if prefix == "v4" else (False,):
+            single = fit_booster(train_anchor, valid_anchor, "y", monotone=monotone, columns=columns)
+            name = f"{prefix}_single_window_boosting{'_monotone' if monotone else ''}"
+            record(name, predict(single, anchors), {
+                "formulation": "single_window_classification",
+                "feature_set": prefix,
+                "monotone_constraints": [c for c in MONOTONE_INCREASING if c in columns] if monotone else [],
+                "training_windows": int(len(train_anchor)),
+                "best_iteration": int(single.best_iteration),
+                "top_features_by_gain": top_features(single),
+            })
+            single.save_model(str(output_dir / f"{name}.txt"))
 
     # Out of time: train only on bridge-years whose five-year outcome was known
-    # by the test anchors (label year <= first test anchor year), then score the
-    # test anchors. This is the deployment setting: learn from the past,
-    # forecast the next five years.
+    # by the modal test anchor year, then score the test anchors. This is the
+    # deployment setting: learn from the past, forecast the next five years.
     anchor_year = int(windows.loc[test, "anchor_year"].mode().iloc[0])
     cutoff = anchor_year - HORIZON_YEARS
     labeled = panel["label_deck_drop_5yr"].notna() & (panel["year"] <= cutoff)
     past_train = panel.loc[labeled & panel["bridge_id"].isin(train_bridges)].rename(columns={"label_deck_drop_5yr": "y"})
     past_valid = panel.loc[labeled & panel["bridge_id"].isin(valid_bridges)].rename(columns={"label_deck_drop_5yr": "y"})
-    past = fit_booster(past_train, past_valid, "y", monotone=False)
-    past_probability = past.predict(anchors[feature_columns()])
-    same_period = results["models"]["v4_single_window_boosting"]
     modal = test & windows["anchor_year"].eq(anchor_year).to_numpy()
-    record("v4_single_window_out_of_time", past_probability, {
-        "formulation": "single_window_classification_out_of_time",
-        "training_rows": int(len(past_train)),
-        "last_anchor_year_in_training": cutoff,
-        "best_iteration": int(past.best_iteration),
-        "test_metrics_modal_anchor_year_only": {
-            "anchor_year": anchor_year,
-            "out_of_time": score_metrics(labels[modal].tolist(), past_probability[modal].tolist()),
-        },
-    })
-    same_period["test_metrics_modal_anchor_year_only"] = {"anchor_year": anchor_year}
+    for prefix, columns in feature_sets.items():
+        past = fit_booster(past_train, past_valid, "y", monotone=False, columns=columns)
+        past_probability = predict(past, anchors)
+        record(f"{prefix}_single_window_out_of_time", past_probability, {
+            "formulation": "single_window_classification_out_of_time",
+            "feature_set": prefix,
+            "training_rows": int(len(past_train)),
+            "last_anchor_year_in_training": cutoff,
+            "best_iteration": int(past.best_iteration),
+            "test_metrics_modal_anchor_year_only": {
+                "anchor_year": anchor_year,
+                "metrics": score_metrics(labels[modal].tolist(), past_probability[modal].tolist()),
+            },
+        })
 
     if run_loso:
         results["leave_one_state_out"] = {}
         for state in sorted(windows["state"].unique()):
             print(f"leave-one-state-out fold {state}", flush=True)
             held = windows["state"].eq(state).to_numpy()
-            others = ~windows["state"].eq(state).to_numpy()
-            fold_train = {b for b in train_bridges if not b.startswith(state + "_")}
-            fold_valid = {b for b in valid_bridges if not b.startswith(state + "_")}
+            others = ~held
             fold: dict[str, Any] = {}
-            single = fit_booster(
-                anchors[is_train & others].assign(y=labels[is_train & others]),
-                anchors[is_valid & others].assign(y=labels[is_valid & others]),
-                "y", monotone=False,
-            )
-            probability = single.predict(anchors.loc[held, feature_columns()])
-            fold["v4_single_window_boosting"] = score_metrics(labels[held].tolist(), probability.tolist())
-            predictions.extend(_prediction_rows(windows.loc[held], f"loso_v4_single_window_heldout_{state}", probability))
+            for prefix, columns in feature_sets.items():
+                single = fit_booster(
+                    anchors[is_train & others].assign(y=labels[is_train & others]),
+                    anchors[is_valid & others].assign(y=labels[is_valid & others]),
+                    "y", monotone=False, columns=columns,
+                )
+                probability = predict(single, anchors[held])
+                fold[f"{prefix}_single_window_boosting"] = score_metrics(labels[held].tolist(), probability.tolist())
+                predictions.extend(_prediction_rows(
+                    windows.loc[held], f"loso_{prefix}_single_window_heldout_{state}", probability))
             if run_loso_hazard:
+                fold_train = {b for b in train_bridges if not b.startswith(state + "_")}
+                fold_valid = {b for b in valid_bridges if not b.startswith(state + "_")}
                 booster = fit_booster(
                     hazard_rows(panel, fold_train, last_interval_end=max(interval_end_years)),
                     hazard_rows(panel, fold_valid, last_interval_end=max(interval_end_years)),
@@ -321,6 +341,10 @@ def run(
         writer = csv.writer(handle)
         writer.writerow(("window_id", "asset_id", "state", "split", "label", "model", "probability"))
         writer.writerows(predictions)
+    results["paired_v4_vs_core"] = {
+        reference: compare([output_dir / "hazard_predictions.csv"], reference)
+        for reference in ("core_single_window_boosting", "core_single_window_out_of_time")
+    }
     with open(output_dir / "hazard_results.json", "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2, default=lambda value: None if isinstance(value, float) and math.isnan(value) else value)
     return results
