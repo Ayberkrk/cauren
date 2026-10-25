@@ -160,9 +160,18 @@ This project is a working research prototype, not a finished product.
 
 - **`cauren-civil` has no pretrained model yet.**
   `cauren_core/checkpoints/` ships without one for it. Out of the box,
-  the anomaly-detection core runs on its statistical fallback
-  (median/spread-based calibration and pattern-shape scoring), not a
+  the anomaly-detection core runs on its statistical fallback, not a
   trained neural backbone.
+- **The statistical core needs a per-asset reference to raise an alarm.**
+  With a `baseline` (in the request or stored with
+  `POST /baseline/{asset_id}`), each feature is tested against the asset's
+  own center and scale for spikes, steps, drift, level offset, and
+  flatline, and all tests of a diagnosis are Holm-corrected at a 5%
+  family-wise rate; the 0.34 threshold corresponds to that rate. Without a
+  reference the window can only be compared with itself, so the core
+  reports `insufficient_validated_evidence` with risk 0 instead of
+  alarming. The tests assume independent noise around the reference;
+  autocorrelated or seasonal records will alarm more often than 5%.
 - **A single-snapshot request has no time series to analyze.** If you
   send one reading per feature with no history, the core reports
   `insufficient_temporal_history` / `snapshot_only` instead of a
@@ -226,7 +235,13 @@ validation. Details are in [docs/kw51-case-study.md](docs/kw51-case-study.md).
 `tools/benchmark_core_anomaly.py` runs the full diagnosis pipeline on seeded
 synthetic civil windows (clean noise, stuck and naturally constant features,
 drifts, steps, and spikes measured in reference-scale units) and reports
-alarm rates with Wilson 95% intervals. Protocol and results are in
+alarm rates with Wilson 95% intervals. With a reference, the core alarms
+on 1.4% of clean windows, 99.4% of 3 sigma drifts, 100% of 3 sigma steps,
+92.6% of 6 sigma spikes, and 100% of stuck features that should vary, but
+not on features that are constant by nature (2.2%, the clean rate of the
+other seven). The window-normalized core it replaced alarmed on 1.0% to
+5.8% of every one of those single-feature scenarios regardless of
+magnitude. Protocol and results are in
 [docs/core-anomaly-benchmark.md](docs/core-anomaly-benchmark.md).
 
 ### NYC DOB research dataset
@@ -313,7 +328,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (179 tests with minimal dependencies; 215 total with optional dependencies) |
+| `tests/` | Test suite (188 tests with minimal dependencies; 226 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -364,7 +379,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 179 tests, no network/GPU/numpy/torch required (215 total with optional dependencies)
+python3 -m pytest tests/            # 188 tests, no network/GPU/numpy/torch required (226 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
