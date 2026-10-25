@@ -68,6 +68,14 @@ class SectorAgent:
         taxonomy_match = _match_taxonomy_diagnosis(taxonomy, core_output, physics_evidence, window)
         selected_family = str(core_output.anomaly_family)
         confidence = min(1.0, 0.65 * float(core_output.confidence) + 0.35 * float(route.confidence))
+        if physics_evidence.risk_contribution > 0.0:
+            risk_score_status = "validated_physics_contribution"
+        elif core_output.anomaly_type in {"insufficient_observation", "insufficient_temporal_history"}:
+            risk_score_status = "insufficient_validated_evidence"
+        elif core_output.risk_score > 0.0:
+            risk_score_status = "statistical_research_signal"
+        else:
+            risk_score_status = "no_elevated_research_signal"
         reasoning = self._reasoning(core_output, physics_evidence)
         actions = self._actions(core_output, physics_evidence)
         return CaurenDiagnosis(
@@ -76,6 +84,7 @@ class SectorAgent:
             risk_score=calibrated_risk,
             raw_risk_score=raw_combined_risk,
             calibrated_risk_score=calibrated_risk,
+            risk_score_status=risk_score_status,
             confidence=confidence,
             selected_agent=self.schema.agent_id,
             candidate_agents=route.candidates,

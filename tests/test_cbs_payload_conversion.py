@@ -194,6 +194,18 @@ def test_building_sensors_only_include_observed_fields_and_source_metadata():
     }
 
 
+def test_building_sensor_uses_request_timestamp_when_supplied():
+    payload = DiagnoseIn(
+        building_id="tower-7",
+        timestamp=1_700_000_000,
+        construction_status={"progress_pct": 51},
+    )
+
+    rows = _building_sensors_from_payload(payload)
+
+    assert rows[0]["timestamp"] == payload.timestamp
+
+
 # ---------------------------------------------------------------------------
 # _uses_cbs_building_payload / _building_site_context
 # ---------------------------------------------------------------------------

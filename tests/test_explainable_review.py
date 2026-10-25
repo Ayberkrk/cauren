@@ -225,11 +225,10 @@ def test_load_sensors_json_rejects_an_unusable_shape(tmp_path):
 
 
 def test_run_explainable_review_on_real_public_dataset_rows_reacts_to_real_data():
-    """Runs the general review pipeline (not a fixed scenario) against real
-    rows from data/public_sources/normalized/civil_public_core_assets.csv --
-    a higher-risk bridge asset and a lower-risk building asset should come
-    out with genuinely different diagnoses, proving the pipeline is reading
-    the uploaded data rather than reproducing one canned output.
+    """Keep raw heuristic evidence distinct while suppressing unvalidated risk.
+
+    Real public rows still produce different proposed relation evidence, but
+    one-shot snapshots cannot produce a validated active risk score.
     """
     assert REAL_PUBLIC_CSV.exists(), "expected the repo's real public civil dataset to be present"
     rows = {row["asset_id"]: row for row in load_wide_csv_rows(REAL_PUBLIC_CSV)}
@@ -252,13 +251,16 @@ def test_run_explainable_review_on_real_public_dataset_rows_reacts_to_real_data(
     bridge_diag = bridge_report["diagnosis"]
     building_diag = building_report["diagnosis"]
 
-    # Real, different inputs -> genuinely different risk scores, not a
-    # fixed/repeated number.
-    assert bridge_diag["risk_score"] != building_diag["risk_score"]
-    # The bridge row's high structural_risk_score (0.82) + natural_hazard
-    # (0.66) should read as materially riskier than the building row's low
-    # scores across the board.
-    assert bridge_diag["risk_score"] > building_diag["risk_score"]
+    # These are one-shot snapshots, and current civil physics heuristics are
+    # not independently validated. Do not turn them into an apparently
+    # meaningful risk difference; preserve the different proposed evidence
+    # while marking the active score as insufficient.
+    assert bridge_diag["risk_score_status"] == "insufficient_validated_evidence"
+    assert building_diag["risk_score_status"] == "insufficient_validated_evidence"
+    bridge_physics = bridge_diag["physics_evidence"]["agent_outputs"]
+    building_physics = building_diag["physics_evidence"]["agent_outputs"]
+    assert bridge_physics["proposed_heuristic_risk_contribution"] > building_physics["proposed_heuristic_risk_contribution"]
+    assert bridge_physics["risk_contribution_status"] == "suppressed_unvalidated_rules"
 
     for report in (bridge_report, building_report):
         assert "quality_control" in report["diagnosis"]

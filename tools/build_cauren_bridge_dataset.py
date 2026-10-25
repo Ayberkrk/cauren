@@ -273,11 +273,16 @@ def build_windows(
     metadata_fp = open(agent_dir / "asset_metadata.csv", "w", newline="", encoding="utf-8")
     condition_history_fp = open(agent_dir / "condition_history.csv", "w", newline="", encoding="utf-8")
     readings_fp = open(agent_dir / "raw_sensor_readings.csv", "w", newline="", encoding="utf-8")
-    windows_w = csv.DictWriter(windows_fp, fieldnames=windows_fields); windows_w.writeheader()
-    labels_w = csv.DictWriter(labels_fp, fieldnames=labels_fields); labels_w.writeheader()
-    metadata_w = csv.DictWriter(metadata_fp, fieldnames=metadata_fields); metadata_w.writeheader()
-    condition_history_w = csv.DictWriter(condition_history_fp, fieldnames=condition_history_fields); condition_history_w.writeheader()
-    readings_w = csv.DictWriter(readings_fp, fieldnames=readings_fields); readings_w.writeheader()
+    windows_w = csv.DictWriter(windows_fp, fieldnames=windows_fields)
+    windows_w.writeheader()
+    labels_w = csv.DictWriter(labels_fp, fieldnames=labels_fields)
+    labels_w.writeheader()
+    metadata_w = csv.DictWriter(metadata_fp, fieldnames=metadata_fields)
+    metadata_w.writeheader()
+    condition_history_w = csv.DictWriter(condition_history_fp, fieldnames=condition_history_fields)
+    condition_history_w.writeheader()
+    readings_w = csv.DictWriter(readings_fp, fieldnames=readings_fields)
+    readings_w.writeheader()
 
     window_idx = 0
     labeled_count = 0
@@ -370,7 +375,11 @@ def build_windows(
                 })
         window_ids_by_bridge.append((window_id, bridge_id))
 
-    windows_fp.close(); labels_fp.close(); metadata_fp.close(); condition_history_fp.close(); readings_fp.close()
+    windows_fp.close()
+    labels_fp.close()
+    metadata_fp.close()
+    condition_history_fp.close()
+    readings_fp.close()
 
     bridge_ids_unique = sorted({bid for _wid, bid in window_ids_by_bridge})
     rng = np.random.default_rng(seed)

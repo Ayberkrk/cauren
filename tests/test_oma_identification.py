@@ -1,7 +1,6 @@
 import math
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -129,7 +128,7 @@ def test_pair_modes_matches_timoshenko_for_valid_and_invalid_frequencies():
 
 
 def test_fallback_damping_matches_timoshenko_for_same_record():
-    tm = pytest.importorskip("timoshenko")
+    pytest.importorskip("timoshenko")
     signal = _synthetic_signal([2.0], 50.0, duration_s=120.0, damping=0.02, noise_amplitude=0.1)
 
     fallback = oma._identify_modal_parameters_fallback(signal, 50.0)

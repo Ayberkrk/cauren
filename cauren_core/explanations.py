@@ -51,6 +51,7 @@ def render_diagnosis_explanation(diagnosis: CaurenDiagnosis | Mapping[str, Any])
         "anomaly_type": str(payload.get("anomaly_type") or "unknown_pattern"),
         "anomaly_family": str(payload.get("anomaly_family") or "unknown_family"),
         "risk_score": round(_as_float(payload.get("risk_score"), 0.0), 6),
+        "risk_score_status": str(payload.get("risk_score_status") or "unknown"),
         "confidence": round(_as_float(payload.get("confidence"), 0.0), 6),
         "selected_agent": str(payload.get("selected_agent") or physics.get("agent_id") or "unknown-agent"),
         "physics_evidence": render_physics_evidence(physics),

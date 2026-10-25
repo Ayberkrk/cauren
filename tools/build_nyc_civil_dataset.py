@@ -16,7 +16,7 @@ import math
 import random
 import re
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 

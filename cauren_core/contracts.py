@@ -196,6 +196,7 @@ class CaurenDiagnosis:
     risk_score: float
     raw_risk_score: float
     calibrated_risk_score: float
+    risk_score_status: str
     confidence: float
     selected_agent: str
     candidate_agents: tuple[AgentCandidate, ...]
@@ -214,6 +215,7 @@ class CaurenDiagnosis:
             "risk_score": round(float(self.risk_score), 6),
             "raw_risk_score": round(float(self.raw_risk_score), 6),
             "calibrated_risk_score": round(float(self.calibrated_risk_score), 6),
+            "risk_score_status": self.risk_score_status,
             "confidence": round(float(self.confidence), 6),
             "selected_agent": self.selected_agent,
             "candidate_agents": [

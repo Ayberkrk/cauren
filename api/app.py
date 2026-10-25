@@ -290,7 +290,7 @@ def _building_sensors_from_payload(payload: DiagnoseIn) -> list[dict[str, Any]]:
     status = payload.construction_status
     infra = payload.infrastructure_connections
     findings = payload.inspection_findings
-    timestamp = time.time()
+    timestamp = float(payload.timestamp) if payload.timestamp is not None else time.time()
     values = {
         "structural_risk_score": _score_from_mapping(
             risk, ("structural_risk_score", "structural_risk", "building_risk_score", "risk_score")
