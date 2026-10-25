@@ -148,7 +148,7 @@ def paired_cluster_bootstrap(
     paired_differences: dict[str, Any] = {}
     for name, metrics in difference_samples.items():
         paired_differences[name] = {
-            "direction": "saved hybrid minus comparator; positive PR-AUC and negative Brier favor the hybrid",
+            "direction": f"{reference_model} minus comparator; positive PR-AUC and negative Brier favor {reference_model}",
             "point_difference": {
                 metric: model_intervals[reference_model]["point_estimate"][metric]
                 - model_intervals[name]["point_estimate"][metric]

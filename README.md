@@ -214,6 +214,20 @@ transfer, so no new probability is exposed through the API. Protocol, state
 results, uncertainty intervals, and reproduction steps are in
 [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
 
+### Bridge model v4
+
+The v4 panel keeps every bridge-year with traffic, structure type, deck
+protection, reconstruction and inspection-timing items from the NBI. On the
+same 8,503 test bridges, a v4 booster reaches PR-AUC 0.706 against 0.646 for
+the same booster on v3-equivalent inputs (paired difference +0.060, interval
++0.049 to +0.070). Trained only on outcomes known by 2018 and scored on the
+2018 anchors, the gain holds (0.553 against 0.486, +0.067), and that
+out-of-time figure is the honest estimate of field performance. v4 does not
+transfer better to an unseen state (California 0.462 against 0.613), and a
+discrete-time hazard formulation added nothing over the v3 booster. Full
+tables, calibration and conformal results are in
+[docs/bridge-model-v4.md](docs/bridge-model-v4.md).
+
 ### KW51 bridge modal monitoring case study
 
 `tools/kw51_study.py` tests modal novelty detection on the KW51 steel railway
@@ -328,7 +342,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (188 tests with minimal dependencies; 226 total with optional dependencies) |
+| `tests/` | Test suite (188 tests with minimal dependencies; 242 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -379,7 +393,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 188 tests, no network/GPU/numpy/torch required (226 total with optional dependencies)
+python3 -m pytest tests/            # 188 tests, no network/GPU/numpy/torch required (242 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

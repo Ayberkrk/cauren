@@ -63,6 +63,7 @@ Hybrid-Model/catboost_info/
 # regenerable, so it doesn't belong in git. See data/cauren_bridge/dataset_summary.json
 # for provenance and tools/ for the (re)build path.
 data/cauren_bridge/
+data/cauren_bridge_v4/
 
 # Large NYC Department of Buildings extracts and derived research tables.
 # They are reproducible with tools/download_nyc_civil_sources.py and

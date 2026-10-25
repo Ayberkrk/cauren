@@ -22,8 +22,8 @@ you are working on the `cauren-bridge` backbone you also need `torch`,
 `pyyaml` for the `LLM/` sub-project, and, to rebuild the bridge dataset
 from scratch, `pandas` and `scipy` (`pip install -e '.[backbone,dataset]'`
 covers both of the latter two cases) -- installing the optional test,
-backbone, dataset, benchmark, and PyYAML dependencies brings 38 more tests
-into scope, for 226 total (see `tests/test_docs_match_test_count.py`,
+backbone, dataset, benchmark, and PyYAML dependencies brings 54 more tests
+into scope, for 242 total (see `tests/test_docs_match_test_count.py`,
 which fails CI if this number ever drifts from reality).
 
 Read `README.md` and `operations/CAUREN_CORE_AGENT_ARCHITECTURE.md`
