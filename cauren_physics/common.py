@@ -8,8 +8,13 @@ from cauren_core.contracts import AgentSchema, PhysicsEvidence, SensorWindow
 
 def latest(window: SensorWindow, feature: str) -> float | None:
     for idx, metadata in enumerate(window.features):
-        if metadata.name == feature and any(row[idx] for row in window.presence_mask):
-            return float(window.matrix[-1][idx])
+        if metadata.name != feature:
+            continue
+        # The final row can be an unobserved padding step. Select only a value
+        # whose presence mask says it came from an actual reading.
+        for row_idx in range(min(len(window.matrix), len(window.presence_mask)) - 1, -1, -1):
+            if idx < len(window.presence_mask[row_idx]) and window.presence_mask[row_idx][idx]:
+                return float(window.matrix[row_idx][idx])
     return None
 
 
@@ -18,6 +23,12 @@ def build_relation(name: str, score: float, detail: str, **extra: Any) -> dict[s
         "name": name,
         "score": round(float(max(0.0, min(1.0, score))), 6),
         "detail": detail,
+        # These relations are transparent prototype heuristics, not validated
+        # design checks or engineering conclusions. An agent can replace this
+        # status when a rule has documented, reviewed validation evidence.
+        "validation_status": "unvalidated_decision_support_heuristic",
+        "risk_contribution_enabled": False,
+        "references": [],
     }
     payload.update(extra)
     return payload
@@ -61,6 +72,18 @@ class DomainPhysics:
         subsystem_scores: dict[str, float] | None = None,
         subsystem_notes: dict[str, str] | None = None,
     ) -> PhysicsEvidence:
+        validated_risk_rules = [
+            relation
+            for relation in relations
+            if relation.get("validation_status") == "validated"
+            and relation.get("risk_contribution_enabled") is True
+        ]
+        proposed_risk = max(0.0, min(1.0, float(risk)))
+        # Prototype relations are retained for diagnostics but cannot change
+        # the active diagnosis risk until a rule has both reviewed validation
+        # evidence and an explicit opt-in. No current agent rule meets that
+        # bar, so the physics layer is fail-closed by default.
+        active_risk = proposed_risk if validated_risk_rules else 0.0
         outputs = {
             "physics_class": self.knowledge.physics_class,
             "equipment_families": list(self.knowledge.equipment_families),
@@ -68,6 +91,12 @@ class DomainPhysics:
             "governing_principles": list(self.knowledge.governing_principles),
             "failure_mechanisms": list(self.knowledge.failure_mechanisms),
             "relation_count": len(relations),
+            "interpretation_status": "non_authoritative_decision_support",
+            "engineering_validation_status": "not_established",
+            "proposed_heuristic_risk_contribution": round(proposed_risk, 6),
+            "risk_contribution_status": (
+                "validated_rules_enabled" if validated_risk_rules else "suppressed_unvalidated_rules"
+            ),
         }
         if subsystem_scores:
             outputs["subsystem_scores"] = {
@@ -77,7 +106,7 @@ class DomainPhysics:
             outputs["subsystem_notes"] = dict(subsystem_notes)
         return PhysicsEvidence(
             agent_id=schema.agent_id,
-            risk_contribution=max(0.0, min(1.0, float(risk))),
+            risk_contribution=active_risk,
             relations=tuple(relations),
             missing_features=tuple(missing_features),
             notes=notes,
