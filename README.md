@@ -205,6 +205,14 @@ transfer, so no new probability is exposed through the API. Protocol, state
 results, uncertainty intervals, and reproduction steps are in
 [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
 
+### Statistical core benchmark
+
+`tools/benchmark_core_anomaly.py` runs the full diagnosis pipeline on seeded
+synthetic civil windows (clean noise, stuck and naturally constant features,
+drifts, steps, and spikes measured in reference-scale units) and reports
+alarm rates with Wilson 95% intervals. Protocol and results are in
+[docs/core-anomaly-benchmark.md](docs/core-anomaly-benchmark.md).
+
 ### NYC DOB research dataset
 
 The new-building permit cohort links BIS and DOB NOW permits to both
@@ -289,7 +297,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (163 tests with minimal dependencies; 182 total with optional dependencies) |
+| `tests/` | Test suite (163 tests with minimal dependencies; 188 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -339,7 +347,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (182 total with optional dependencies)
+python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (188 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload
