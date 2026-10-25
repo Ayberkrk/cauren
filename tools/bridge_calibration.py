@@ -156,7 +156,7 @@ def conformal_sets(frame: pd.DataFrame, *, coverage: float = 0.90) -> dict[str, 
     return report
 
 
-def run(predictions: Path, model: str, *, loso_prefix: str = "loso_v4_hazard_heldout_") -> dict[str, Any]:
+def run(predictions: Path, model: str, *, loso_prefix: str = "loso_v4_single_window_heldout_") -> dict[str, Any]:
     frame = pd.read_csv(predictions, dtype={"window_id": str, "asset_id": str, "state": str})
     chosen = frame[frame["model"].eq(model)]
     if chosen.empty:
@@ -176,9 +176,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--loso-prefix", default="loso_v4_single_window_heldout_")
     parser.add_argument("--output-json", type=Path)
     args = parser.parse_args()
-    report = run(args.predictions, args.model)
+    report = run(args.predictions, args.model, loso_prefix=args.loso_prefix)
     text = json.dumps(report, indent=2)
     if args.output_json:
         args.output_json.write_text(text, encoding="utf-8")

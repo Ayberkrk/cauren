@@ -138,6 +138,14 @@ def risk_by_horizon(booster: Any, anchor: pd.DataFrame, horizon: int = HORIZON_Y
     return curves
 
 
+def top_features(booster: Any, count: int = 15) -> list[dict[str, float]]:
+    gains = booster.feature_importance(importance_type="gain")
+    total = float(gains.sum()) or 1.0
+    order = np.argsort(gains)[::-1][:count]
+    names = booster.feature_name()
+    return [{"feature": names[i], "gain_share": round(float(gains[i]) / total, 4)} for i in order]
+
+
 def _dataset(lgb: Any, rows: pd.DataFrame, label: str, reference: Any = None) -> Any:
     return lgb.Dataset(
         rows[feature_columns()], label=rows[label].to_numpy(), categorical_feature=CATEGORICAL_FEATURES,
@@ -190,6 +198,7 @@ def run(
     *,
     interval_end_years: tuple[int, ...] = (2018, 2023),
     run_loso: bool = True,
+    run_loso_hazard: bool = True,
 ) -> dict[str, Any]:
     from tools.bridge_model_metrics import score_metrics
 
@@ -211,6 +220,8 @@ def run(
 
     def record(name: str, probability: np.ndarray, extra: dict[str, Any]) -> None:
         metrics = score_metrics(windows.loc[test, "label"].astype(float).tolist(), probability[test].tolist())
+        print(f"{name}: test PR-AUC {metrics.get('pr_auc_average_precision'):.4f}, "
+              f"Brier {metrics.get('brier_score'):.4f}", flush=True)
         results["models"][name] = {**extra, "test_metrics": metrics}
         # Validation rows are kept for post-hoc calibration (tools/bridge_calibration.py);
         # the paired bootstrap only uses windows every model scored, i.e. test.
@@ -234,33 +245,77 @@ def run(
             })
             booster.save_model(str(output_dir / f"{name}.txt"))
 
-    # Ablation: the same v4 covariates in the v3 single-window formulation.
-    train_anchor = anchors[windows["split"].eq("train").to_numpy()].assign(
-        y=windows.loc[windows["split"].eq("train"), "label"].astype(float).to_numpy())
-    valid_anchor = anchors[windows["split"].eq("validation").to_numpy()].assign(
-        y=windows.loc[windows["split"].eq("validation"), "label"].astype(float).to_numpy())
-    single = fit_booster(train_anchor, valid_anchor, "y", monotone=False)
-    record("v4_single_window_boosting", single.predict(anchors[feature_columns()]), {
-        "formulation": "single_window_classification",
-        "training_windows": int(len(train_anchor)),
-        "best_iteration": int(single.best_iteration),
+    # The same v4 covariates in the v3 single-window formulation, trained on
+    # the v3 anchor of every train bridge.
+    is_train = windows["split"].eq("train").to_numpy()
+    is_valid = windows["split"].eq("validation").to_numpy()
+    labels = windows["label"].astype(float).to_numpy()
+    train_anchor = anchors[is_train].assign(y=labels[is_train])
+    valid_anchor = anchors[is_valid].assign(y=labels[is_valid])
+    for monotone in (False, True):
+        single = fit_booster(train_anchor, valid_anchor, "y", monotone=monotone)
+        name = f"v4_single_window_boosting{'_monotone' if monotone else ''}"
+        record(name, single.predict(anchors[feature_columns()]), {
+            "formulation": "single_window_classification",
+            "monotone_constraints": list(MONOTONE_INCREASING) if monotone else [],
+            "training_windows": int(len(train_anchor)),
+            "best_iteration": int(single.best_iteration),
+            "top_features_by_gain": top_features(single),
+        })
+        single.save_model(str(output_dir / f"{name}.txt"))
+
+    # Out of time: train only on bridge-years whose five-year outcome was known
+    # by the test anchors (label year <= first test anchor year), then score the
+    # test anchors. This is the deployment setting: learn from the past,
+    # forecast the next five years.
+    anchor_year = int(windows.loc[test, "anchor_year"].mode().iloc[0])
+    cutoff = anchor_year - HORIZON_YEARS
+    labeled = panel["label_deck_drop_5yr"].notna() & (panel["year"] <= cutoff)
+    past_train = panel.loc[labeled & panel["bridge_id"].isin(train_bridges)].rename(columns={"label_deck_drop_5yr": "y"})
+    past_valid = panel.loc[labeled & panel["bridge_id"].isin(valid_bridges)].rename(columns={"label_deck_drop_5yr": "y"})
+    past = fit_booster(past_train, past_valid, "y", monotone=False)
+    past_probability = past.predict(anchors[feature_columns()])
+    same_period = results["models"]["v4_single_window_boosting"]
+    modal = test & windows["anchor_year"].eq(anchor_year).to_numpy()
+    record("v4_single_window_out_of_time", past_probability, {
+        "formulation": "single_window_classification_out_of_time",
+        "training_rows": int(len(past_train)),
+        "last_anchor_year_in_training": cutoff,
+        "best_iteration": int(past.best_iteration),
+        "test_metrics_modal_anchor_year_only": {
+            "anchor_year": anchor_year,
+            "out_of_time": score_metrics(labels[modal].tolist(), past_probability[modal].tolist()),
+        },
     })
+    same_period["test_metrics_modal_anchor_year_only"] = {"anchor_year": anchor_year}
 
     if run_loso:
         results["leave_one_state_out"] = {}
         for state in sorted(windows["state"].unique()):
+            print(f"leave-one-state-out fold {state}", flush=True)
             held = windows["state"].eq(state).to_numpy()
+            others = ~windows["state"].eq(state).to_numpy()
             fold_train = {b for b in train_bridges if not b.startswith(state + "_")}
             fold_valid = {b for b in valid_bridges if not b.startswith(state + "_")}
-            booster = fit_booster(
-                hazard_rows(panel, fold_train, last_interval_end=max(interval_end_years)),
-                hazard_rows(panel, fold_valid, last_interval_end=max(interval_end_years)),
-                "label_deck_drop_next", monotone=False,
+            fold: dict[str, Any] = {}
+            single = fit_booster(
+                anchors[is_train & others].assign(y=labels[is_train & others]),
+                anchors[is_valid & others].assign(y=labels[is_valid & others]),
+                "y", monotone=False,
             )
-            probability = cumulative_risk(booster, anchors[held])
-            results["leave_one_state_out"][state] = score_metrics(
-                windows.loc[held, "label"].astype(float).tolist(), probability.tolist())
-            predictions.extend(_prediction_rows(windows.loc[held], f"loso_v4_hazard_heldout_{state}", probability))
+            probability = single.predict(anchors.loc[held, feature_columns()])
+            fold["v4_single_window_boosting"] = score_metrics(labels[held].tolist(), probability.tolist())
+            predictions.extend(_prediction_rows(windows.loc[held], f"loso_v4_single_window_heldout_{state}", probability))
+            if run_loso_hazard:
+                booster = fit_booster(
+                    hazard_rows(panel, fold_train, last_interval_end=max(interval_end_years)),
+                    hazard_rows(panel, fold_valid, last_interval_end=max(interval_end_years)),
+                    "label_deck_drop_next", monotone=False,
+                )
+                probability = cumulative_risk(booster, anchors[held])
+                fold["v4_hazard"] = score_metrics(labels[held].tolist(), probability.tolist())
+                predictions.extend(_prediction_rows(windows.loc[held], f"loso_v4_hazard_heldout_{state}", probability))
+            results["leave_one_state_out"][state] = fold
 
     with open(output_dir / "hazard_predictions.csv", "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -292,13 +347,16 @@ def main() -> None:
     parser.add_argument("--v3-dataset-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--skip-loso", action="store_true")
+    parser.add_argument("--hazard-end-years", type=int, nargs="*", default=[2018, 2023],
+                        help="hazard training cutoffs; pass none to skip the hazard arm")
     parser.add_argument("--compare-with", type=Path, default=None,
                         help="benchmark model_predictions.csv to bootstrap against")
     parser.add_argument("--reference-model", default="hist_gradient_boosting")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    results = run(args.panel, args.v3_dataset_dir, args.output_dir, run_loso=not args.skip_loso)
+    results = run(args.panel, args.v3_dataset_dir, args.output_dir, run_loso=not args.skip_loso,
+                  interval_end_years=tuple(args.hazard_end_years), run_loso_hazard=bool(args.hazard_end_years))
     if args.compare_with is not None:
         results["paired_bridge_cluster_bootstrap"] = compare(
             [args.compare_with, args.output_dir / "hazard_predictions.csv"], args.reference_model)

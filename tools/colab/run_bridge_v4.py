@@ -49,6 +49,8 @@ def main() -> None:
     parser.add_argument("--work", type=Path, default=Path("/content/work"))
     parser.add_argument("--states", nargs="+", default=["CA", "IA", "PA"])
     parser.add_argument("--skip-v3-benchmark", action="store_true")
+    parser.add_argument("--hazard-end-years", type=int, nargs="*", default=[2018, 2023],
+                        help="hazard training cutoffs; pass the flag with no values to skip the hazard arm")
     args = parser.parse_args()
 
     raw = args.work / "nbi_raw"
@@ -74,13 +76,14 @@ def main() -> None:
         sh("tools/build_bridge_years_v4.py", *common,
            "--v3-windows", str(v3 / "agents" / "cauren-bridge" / "windows.csv"), "--output-dir", str(v4))
     hazard_args = ["tools/bridge_hazard.py", "--panel", str(v4 / "bridge_years.parquet"),
-                   "--v3-dataset-dir", str(v3), "--output-dir", str(v4 / "hazard")]
+                   "--v3-dataset-dir", str(v3), "--output-dir", str(v4 / "hazard"),
+                   "--hazard-end-years", *map(str, args.hazard_end_years)]
     if predictions.exists():
         hazard_args += ["--compare-with", str(predictions)]
     sh(*hazard_args)
     calibration = v4 / "hazard" / "calibration.json"
     sh("tools/bridge_calibration.py", "--predictions", str(v4 / "hazard" / "hazard_predictions.csv"),
-       "--model", "v4_hazard_end2023", "--output-json", str(calibration))
+       "--model", "v4_single_window_boosting", "--output-json", str(calibration))
 
     report = {
         "v3_summary": json.loads((v3 / "dataset_summary.json").read_text()),
