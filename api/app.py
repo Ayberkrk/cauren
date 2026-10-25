@@ -92,7 +92,9 @@ class RequestGuardMiddleware:
         async def replay_body():
             nonlocal sent
             if sent:
-                return {"type": "http.request", "body": b"", "more_body": False}
+                # The body is fully replayed; later receives must still report
+                # a real client disconnect instead of an endless empty request.
+                return await receive()
             sent = True
             return {"type": "http.request", "body": bytes(body), "more_body": False}
 

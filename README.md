@@ -289,7 +289,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (163 tests with minimal dependencies; 182 total with optional dependencies) |
+| `tests/` | Test suite (164 tests with minimal dependencies; 183 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
 
@@ -339,7 +339,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 163 tests, no network/GPU/numpy/torch required (182 total with optional dependencies)
+python3 -m pytest tests/            # 164 tests, no network/GPU/numpy/torch required (183 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

@@ -91,6 +91,35 @@ def test_request_body_limit_returns_413(client):
     assert response.status_code == 413
 
 
+def test_request_guard_forwards_disconnect_after_replayed_body(monkeypatch):
+    import asyncio
+
+    from api.app import RequestGuardMiddleware
+
+    monkeypatch.delenv("CAUREN_API_KEY", raising=False)
+    incoming = [
+        {"type": "http.request", "body": b"{}", "more_body": False},
+        {"type": "http.disconnect"},
+    ]
+    received = []
+
+    async def receive():
+        return incoming.pop(0)
+
+    async def send(message):
+        pass
+
+    async def downstream(scope, receive, send):
+        received.append(await receive())
+        received.append(await receive())
+
+    scope = {"type": "http", "path": "/diagnose", "headers": []}
+    asyncio.run(RequestGuardMiddleware(downstream)(scope, receive, send))
+
+    assert received[0]["body"] == b"{}"
+    assert received[1] == {"type": "http.disconnect"}
+
+
 def test_sensor_row_limit_is_validated(client):
     response = client.post("/diagnose", json={"sensors": [{}] * 8193})
     assert response.status_code == 422
