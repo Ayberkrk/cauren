@@ -169,11 +169,10 @@ This project is a working research prototype, not a finished product.
   the physics layer's read of the values you sent. Send a real time
   series (`seq_len` distinct timestamps) for genuine pattern-shape
   detection (drift, spike, oscillation, flatline, and so on).
-- **`LLM/` (`rocket_llm`) is pre-alpha.** No CLI is exposed yet --
-  `pyproject.toml` deliberately has no `[project.scripts]` section,
-  commented out until each backing module exists (see the file for the
-  planned list). Only `LLM/src/rocket_llm/pipelines/training.py` is
-  implemented so far.
+- **`LLM/` (`rocket_llm`) is pre-alpha.** Its only CLI,
+  `rocket-llm-prepare-sft`, converts structured and engineer-reviewed
+  records into SFT JSONL; it does not run a model or train weights. The
+  job stays disabled in the default config until an operator enables it.
 - **`cauren-civil` does not derive its 8 scores from raw sensor/CBS
   data, it consumes them.** The required features are expected to
   already exist (from a field inspection, an engineering assessment,
@@ -286,7 +285,7 @@ reviewer, not damage verdicts.
 | `api/` | FastAPI service exposing the pipeline over HTTP |
 | `tools/` | Dataset build and training scripts |
 | `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (137 tests with the minimal dependency set; 156 total once pandas/torch/PyYAML are also installed) |
+| `tests/` | Test suite (145 tests with minimal dependencies; 164 total with optional dependencies) |
 | `operations/` | Architecture and data-contract reference docs |
 | `LLM/` | Pre-alpha advisory-LLM sub-project, not yet functional |
 
@@ -333,7 +332,7 @@ declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 137 tests, no network/GPU/numpy/torch required (156 total with pandas/torch/PyYAML also installed)
+python3 -m pytest tests/            # 145 tests, no network/GPU/numpy/torch required (164 total with optional dependencies)
 
 pip install -e '.[api]'             # only needed to actually run the API
 python3 api/app.py                  # or: uvicorn api.app:app --reload

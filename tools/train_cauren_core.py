@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from cauren_core.training import CaurenCoreTrainConfig, train_cauren_core
+from cauren_core.training import CaurenCoreTrainConfig, require_nyc_training_eligibility, train_cauren_core
 
 
 LOCAL_PROFILES = {
@@ -62,6 +62,11 @@ def main() -> None:
         for field, profile_value in LOCAL_PROFILES[args.profile].items():
             if f"--{field.replace('_', '-')}" not in explicit_flags and getattr(args, field) == defaults[field]:
                 setattr(args, field, profile_value)
+
+    try:
+        require_nyc_training_eligibility(Path(args.dataset_dir))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     summary = train_cauren_core(
         CaurenCoreTrainConfig(

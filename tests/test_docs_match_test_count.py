@@ -74,7 +74,7 @@ def test_readme_and_contributing_report_the_actual_test_counts():
             f"minimal, {total} total across tests/. Update {doc_name}'s wording."
         )
         assert f"{total} total" in text, (
-            f"{doc_name} doesn't mention '{total} total' (the full count once pandas/torch/"
-            f"PyYAML are also installed). Actual: {minimal} minimal, {total} total. "
+            f"{doc_name} doesn't mention '{total} total' (the full count once optional dependencies "
+            f"are installed). Actual: {minimal} minimal, {total} total. "
             f"Update {doc_name}'s wording."
         )

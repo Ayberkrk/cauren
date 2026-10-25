@@ -3,10 +3,11 @@
 Advisory LLM scaffold for Cauren (fault/diagnosis explanation and briefing
 generation), packaged separately from the root `cauren` package.
 
-**Status: pre-alpha.** `pyproject.toml` declares dependency groups and a
-package layout, but only `src/rocket_llm/pipelines/training.py` is
-implemented so far; there is no CLI yet (see the root repository's issue
-tracker for the entry-point rollout plan).
+**Status: pre-alpha.** The only executable slice currently implemented is
+`rocket-llm-prepare-sft`, which converts structured records and
+engineer-reviewed corrections into chat-style SFT JSONL. It does not call a
+model, train weights, or generate engineering advice. The job stays disabled
+in the default training config until an operator enables it.
 
 ## Development setup
 
@@ -15,3 +16,8 @@ cd LLM
 pip install -e '.[dev]'
 pytest
 ```
+
+After enabling `prepare_sft_dataset` in the training YAML, run
+`rocket-llm-prepare-sft --config configs/training.yaml` from this directory.
+The command reports row counts and stops on malformed JSONL instead of
+silently dropping records.

@@ -58,10 +58,13 @@ import glob
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from tools.provenance import file_record, package_versions
 
 MAX_SEQ_LEN = 16
 MIN_REAL_YEARS = 8
@@ -226,7 +229,13 @@ def join_hazard(nbi: pd.DataFrame, nshm_csv: Path, nfhl_csv: Path) -> pd.DataFra
     return nbi
 
 
-def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dict:
+def build_windows(
+    nbi: pd.DataFrame,
+    output_dir: Path,
+    *,
+    seed: int = 42,
+    source_inputs: dict | None = None,
+) -> dict:
     nbi = nbi.drop_duplicates(subset=["bridge_id", "year"], keep="first")
     nbi = nbi.sort_values(["bridge_id", "year"]).reset_index(drop=True)
 
@@ -427,6 +436,12 @@ def build_windows(nbi: pd.DataFrame, output_dir: Path, *, seed: int = 42) -> dic
         },
         "license_posture": "public_research_reproducible_cc_by_4.0",
         "source": "FHWA National Bridge Inventory 2000-2023 (via sweetapricity/bridgedeck-nbi, sweetapricity/bridgedeck-nshm, sweetapricity/bridgedeck-nfhl on Hugging Face)",
+        "build_provenance": {
+            "seed": int(seed),
+            "python_version": sys.version.split()[0],
+            "package_versions": package_versions(("numpy", "pandas", "scipy")),
+            "source_inputs": source_inputs or {},
+        },
         "states_included": sorted(nbi["state_code"].unique().tolist()),
         "sampling_hz": 3.168808781402895e-08,
         "splits": {k: len(v) for k, v in split_lists.items()},
@@ -467,7 +482,13 @@ def main() -> None:
 
     nbi = load_nbi(args.raw_dir, states)
     nbi = join_hazard(nbi, args.nshm_csv, args.nfhl_csv)
-    summary = build_windows(nbi, args.output_dir, seed=args.seed)
+    nbi_files = sorted(args.raw_dir.glob("*.txt"))
+    source_inputs = {
+        "nbi": [file_record(path, source_id="fhwa_nbi") for path in nbi_files],
+        "usgs_nshm": file_record(args.nshm_csv, source_id="usgs_nshm"),
+        "fema_nfhl": file_record(args.nfhl_csv, source_id="fema_nfhl"),
+    }
+    summary = build_windows(nbi, args.output_dir, seed=args.seed, source_inputs=source_inputs)
     print(json.dumps(summary, indent=2))
 
 

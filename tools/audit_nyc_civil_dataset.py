@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Any
+
+from tools.provenance import sha256_file
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -37,11 +40,19 @@ def audit_dataset(
     dataset_dir: Path, *, minimum_reviewed: int = 57, minimum_decisive_matches: int = 20,
     minimum_precision: float = 0.98, minimum_precision_lower_bound: float = 0.90,
 ) -> dict[str, Any]:
-    summary = json.loads((dataset_dir / "dataset_summary.json").read_text(encoding="utf-8"))
-    labels = _rows(dataset_dir / "label_ledger.csv")
-    features = _rows(dataset_dir / "features.csv")
-    certificates = _rows(dataset_dir / "certificates.csv")
-    review = _rows(dataset_dir / "linkage_review_queue.csv")
+    summary_bytes = (dataset_dir / "dataset_summary.json").read_bytes()
+    summary = json.loads(summary_bytes.decode("utf-8"))
+    audit_input_paths = {
+        name: dataset_dir / name
+        for name in (
+            "dataset_summary.json", "label_ledger.csv", "features.csv",
+            "certificates.csv", "linkage_review_queue.csv",
+        )
+    }
+    labels = _rows(audit_input_paths["label_ledger.csv"])
+    features = _rows(audit_input_paths["features.csv"])
+    certificates = _rows(audit_input_paths["certificates.csv"])
+    review = _rows(audit_input_paths["linkage_review_queue.csv"])
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -142,10 +153,14 @@ def audit_dataset(
             late_feature_rows += 1
             if any(item.get("field") not in {"filing_date", "approved_date"} for item in removed_fields):
                 errors.append(f"unsupported date leakage field was recorded for {project_id}")
-        if feature.get("feature_temporal_status") == "dated_events_filtered_to_anchor_static_source_fields_unversioned":
+        temporal_status = feature.get("feature_temporal_status", "")
+        if temporal_status == "dated_events_filtered_to_anchor_static_source_fields_unversioned":
             unversioned_feature_rows += 1
-        else:
-            errors.append(f"missing source-versioning status for {project_id}")
+        elif temporal_status not in {
+            "all_fields_proven_available_as_of_anchor",
+            "unversioned_static_fields_excluded",
+        }:
+            errors.append(f"missing or unsupported source-versioning status for {project_id}")
     if late_feature_rows:
         warnings.append(f"late-dated source fields were removed from {late_feature_rows} permit rows")
     if unversioned_feature_rows:
@@ -155,6 +170,12 @@ def audit_dataset(
     missing_hazard = sum(not row.get("natural_hazard_score", "").strip() for row in features)
     if missing_hazard:
         warnings.append(f"natural-hazard score is missing for {missing_hazard} BINs; attach and audit FEMA/USGS spatial layers before modeling")
+    hazard_vintage_missing_rows = sum(not row.get("natural_hazard_source_vintage", "").strip() for row in features)
+    if hazard_vintage_missing_rows:
+        warnings.append(
+            f"natural-hazard source vintage is missing for {hazard_vintage_missing_rows} BINs; "
+            "point-in-time hazard claims cannot be checked"
+        )
     hazard_vintage_rows = 0
     for feature in features:
         vintage = feature.get("natural_hazard_source_vintage", "").strip()
@@ -219,8 +240,48 @@ def audit_dataset(
         warning for warning in sorted_warnings
         if not warning.startswith("late-dated source fields were removed")
     ]
+    manual_review_gate_passed = (
+        len(reviewed) >= minimum_reviewed
+        and match_precision is not None
+        and decided >= minimum_decisive_matches
+        and match_precision >= minimum_precision
+        and precision_interval is not None
+        and precision_interval[0] >= minimum_precision_lower_bound
+    )
+    # This is an eligibility gate, not a quality score. The administrative
+    # permit-to-CO target is not engineering-safety truth, and a dataset with
+    # unreviewed links or non-point-in-time inputs must never be trainable by
+    # accident merely because its structural CSV checks passed.
+    observed_binary_classes = {
+        row.get("co_issued_within_horizon", "")
+        for row in labels
+        if row.get("co_issued_within_horizon", "") in {"0", "1"}
+    }
+    training_gates = {
+        "non_empty_dataset": bool(labels and features),
+        "both_binary_outcome_classes_available": observed_binary_classes == {"0", "1"},
+        "complete_source_extraction": bool(summary.get("complete_extraction", False)),
+        "cohort_scope_matches_source_manifest": bool(summary.get("cohort_scope_matches_source_manifest", False)),
+        "manual_linkage_review": manual_review_gate_passed,
+        "all_bin_groups_single_split": not any("appears in both" in error for error in errors),
+        "source_fields_point_in_time": unversioned_feature_rows == 0,
+        "hazard_vintage_point_in_time": hazard_vintage_rows == 0,
+        "hazard_vintage_known": hazard_vintage_missing_rows == 0,
+        "hazard_coverage_complete": missing_hazard == 0,
+        "finding_disposition_semantics_resolved": not missing_disposition_counts,
+        "target_is_not_engineering_safety_truth": summary.get("target_is_engineering_safety_truth") is False,
+        "structural_audit_clean": not errors,
+        "blocking_audit_warnings_resolved": not blocking_warnings,
+    }
+    training_blockers = [name for name, passed in training_gates.items() if not passed]
+    training_eligible = not training_blockers
     report = {
         "dataset_id": summary.get("dataset_id"),
+        "dataset_summary_sha256": hashlib.sha256(summary_bytes).hexdigest(),
+        "audit_input_sha256": {
+            name: hashlib.sha256(summary_bytes).hexdigest() if name == "dataset_summary.json" else sha256_file(path)
+            for name, path in audit_input_paths.items()
+        },
         "building_count": len(labels),
         "label_status_counts": dict(label_status),
         "borough_label_status_counts": {borough: dict(counts) for borough, counts in sorted(per_borough.items())},
@@ -237,9 +298,7 @@ def audit_dataset(
             "minimum_decisive_matches_gate": minimum_decisive_matches,
             "minimum_precision_gate": minimum_precision,
             "minimum_precision_wilson_lower_bound_gate": minimum_precision_lower_bound,
-            "gate_passed": len(reviewed) >= minimum_reviewed and match_precision is not None
-            and decided >= minimum_decisive_matches and match_precision >= minimum_precision
-            and precision_interval is not None and precision_interval[0] >= minimum_precision_lower_bound,
+            "gate_passed": manual_review_gate_passed,
         },
         "all_bin_groups_single_split": not any("appears in both" in error for error in errors),
         "source_extraction_complete": summary.get("complete_extraction", False),
@@ -247,12 +306,23 @@ def audit_dataset(
         "source_record_version_unavailable_rows": unversioned_feature_rows,
         "natural_hazard_missing_rows": missing_hazard,
         "natural_hazard_vintage_after_anchor_rows": hazard_vintage_rows,
+        "natural_hazard_vintage_missing_rows": hazard_vintage_missing_rows,
         "permit_status_score_coverage": permit_status_coverage,
         "finding_rows_missing_disposition_date": missing_disposition_counts,
         "errors": errors,
         "warnings": sorted_warnings,
         "blocking_warnings": blocking_warnings,
-        "dataset_ready_for_modeling": not errors and not blocking_warnings and summary.get("complete_extraction", False),
+        "training_eligibility": {
+            "eligible": training_eligible,
+            "status": "eligible" if training_eligible else "blocked",
+            "gates": training_gates,
+            "blockers": training_blockers,
+            "blocking_warnings": blocking_warnings,
+            "target_scope": "administrative permit-to-CO outcome; not an engineering-safety label",
+        },
+        # Preserve the existing key for downstream consumers, but make it
+        # equivalent to the stricter, explicit gate above.
+        "dataset_ready_for_modeling": training_eligible,
     }
     return report
 
@@ -265,6 +335,11 @@ def main() -> None:
     parser.add_argument("--minimum-decisive-matches", type=int, default=20)
     parser.add_argument("--minimum-precision", type=float, default=0.98)
     parser.add_argument("--minimum-precision-lower-bound", type=float, default=0.90)
+    parser.add_argument(
+        "--require-model-ready",
+        action="store_true",
+        help="Exit with status 3 unless every human-review and point-in-time training gate passes",
+    )
     args = parser.parse_args()
     report = audit_dataset(
         args.dataset_dir,
@@ -274,12 +349,16 @@ def main() -> None:
         minimum_precision_lower_bound=args.minimum_precision_lower_bound,
     )
     encoded = json.dumps(report, indent=2, sort_keys=True)
-    if args.output_json:
+    eligibility_path = args.dataset_dir / "modeling_eligibility.json"
+    eligibility_path.write_text(encoded + "\n", encoding="utf-8")
+    if args.output_json and args.output_json != eligibility_path:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(encoded + "\n", encoding="utf-8")
     print(encoded)
     if report["errors"]:
         raise SystemExit(2)
+    if args.require_model_ready and not report["training_eligibility"]["eligible"]:
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":
