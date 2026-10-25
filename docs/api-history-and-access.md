@@ -40,3 +40,40 @@ Request bodies are limited to 1 MiB and sensor arrays to 8,192 rows. A request
 that exceeds either bound is rejected before diagnosis. The service continues
 to be a single-operator prototype; the Bearer key does not provide user
 accounts or tenant isolation.
+
+## Per-asset baselines
+
+The statistical core scores a window against a per-asset reference: for each
+feature, a robust center, a robust scale, the number of reference samples, and
+whether the feature is expected to vary at all. A reference is resolved per
+request in this order:
+
+1. `baseline` in the `/diagnose` body:
+   `{"<feature>": {"center": 0.4, "scale": 0.03, "n": 120, "expected_variation": true, "unit": "ratio"}}`.
+   Every value must be finite, `scale` must be positive, and `n` must be at
+   least 30; otherwise the request is rejected with 422.
+2. The baseline stored for the request's `asset_id` with
+   `POST /baseline/{asset_id}` (only when `asset_id` is given explicitly).
+3. None. The core then has only the window itself to compare against; the
+   response reports `"reference": "none"` and a lower core confidence.
+
+The response always carries `reference` (`payload`, `stored`, or `none`) and
+`reference_coverage`, which lists the features with and without a reference
+and any supplied features outside the agent schema.
+
+`POST /baseline/{asset_id}` takes a reference window in the `/diagnose` sensor
+row format (every row needs a `timestamp`), normalizes it with the same alias
+and unit rules as diagnosis, and fits each feature's median and
+MAD x 1.4826 (the mean absolute deviation when more than half the samples are
+identical). A feature that never varies in the reference has no scale to
+measure against: pass `min_scale` for it (for example the measurement
+resolution) and it is stored with `expected_variation: false`. Features with
+fewer than 30 samples are listed under `skipped`. Only these summary
+statistics are stored, in the `asset_baselines` table of the history
+database; the reference readings themselves are not retained. Stored
+baselines are configuration and are not removed by history retention.
+`GET /baseline/{asset_id}` returns what is stored.
+
+A baseline is decision-support context, not a certification of normal
+behavior: fit it from a period the operator has reviewed and believes to be
+representative.

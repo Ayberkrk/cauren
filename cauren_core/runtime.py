@@ -7,6 +7,8 @@ from .backbone import CaurenHybridBackbone, HybridBackboneUnavailable
 from .contracts import CoreOutput, SensorWindow
 from .risk_calibration import calibrated_core_risk, risk_profile
 
+NO_REFERENCE_CONFIDENCE_FACTOR = 0.6
+
 
 class CaurenCoreRuntime:
     """
@@ -405,6 +407,11 @@ class CaurenCoreRuntime:
             risk_score = min(risk_score, 0.12)
         mask_true = sum(1 for row in mask for item in row if item)
         confidence = min(1.0, 0.35 + 0.45 * float(mask_true) / float(max(1, mask_size)) + 0.20 * risk_score)
+        if not context.get("feature_baselines"):
+            # Without a per-asset reference every score above is relative to
+            # this window alone, which cannot tell a large change from a
+            # small one. Say so in the confidence rather than in the label.
+            confidence *= NO_REFERENCE_CONFIDENCE_FACTOR
         return CoreOutput(
             anomaly_type=anomaly_type,
             anomaly_family=anomaly_family,
@@ -503,6 +510,8 @@ def _baseline_delta_score(window: SensorWindow, mask: list[list[bool]], context:
         if idx >= len(mask[0]):
             break
         baseline_value = baseline_map.get(feature.name)
+        if isinstance(baseline_value, dict):
+            baseline_value = baseline_value.get("center")
         try:
             baseline = float(baseline_value)
         except (TypeError, ValueError):

@@ -7,6 +7,7 @@ from cauren_agents.registry import AgentRegistry, build_default_registry
 from cauren_agents.router import AgentRouter
 
 from .adapter import AgentSchemaAdapter, parse_sensor_readings
+from .baseline import REFERENCE_SOURCES, parse_baselines, reference_summary
 from .contracts import AgentCandidate, CaurenDiagnosis, NormalizationTrace, SectorScoreBreakdown
 from .normalization import FeatureNormalizer
 from cauren_agents.base import AgentRoute
@@ -128,6 +129,15 @@ class CaurenPipeline:
         payload: Mapping[str, Any],
         normalization_trace: NormalizationTrace,
     ) -> CaurenDiagnosis:
+        # Resolved per call and handed to the core through its context, never
+        # kept on self: the pipeline is shared across concurrent requests.
+        supplied = parse_baselines(payload.get("baseline"))
+        feature_names = [feature.name for feature in window.features]
+        reference_source = str(payload.get("baseline_source") or ("payload" if supplied else "none"))
+        if reference_source not in REFERENCE_SOURCES:
+            raise ValueError(f"baseline_source must be one of: {', '.join(REFERENCE_SOURCES)}")
+        reference = reference_summary(reference_source, supplied, feature_names)
+        baselines = {name: value for name, value in supplied.items() if name in feature_names}
         core_output = self.core.classify(
             window,
             sampling_hz=float(payload.get("sampling_hz") or 1.0),
@@ -139,6 +149,8 @@ class CaurenPipeline:
                 "scenario_metadata": payload.get("scenario_metadata") or {},
                 "mission_phase": payload.get("mission_phase") or "",
                 "client_id": payload.get("client_id") or "",
+                "feature_baselines": {name: value.to_dict() for name, value in baselines.items()},
+                "reference_source": reference["source"],
             },
         )
         physics_evidence = agent.physics.evaluate(
@@ -174,6 +186,8 @@ class CaurenPipeline:
         )
         merged_outputs = dict(diagnosis.agent_outputs)
         merged_outputs.update(self._normalization_outputs(normalization_trace))
+        merged_outputs["reference"] = reference["source"]
+        merged_outputs["reference_coverage"] = reference
         merged_outputs["quality_control"] = quality_report.to_dict()
         merged_outputs["uncertainty_report"] = uncertainty_report.to_dict()
         return replace(diagnosis, agent_outputs=merged_outputs)
@@ -233,6 +247,29 @@ class CaurenPipeline:
             "raw_sensor_count": int(window.raw_sensor_count),
             **self._normalization_outputs(normalization_trace),
         }
+
+    def reference_values(self, payload: Mapping[str, Any]) -> tuple[str, dict[str, list[float]], dict[str, str]]:
+        """Normalize a reference window and return each feature's observed values.
+
+        Uses the same alias, unit, and routing rules as diagnose(), so a
+        baseline is fitted in exactly the units the core will later score in.
+        Returns (agent_id, {feature: values}, {feature: unit}).
+        """
+        sensors_payload = payload.get("sensors") or payload.get("sensor_readings") or []
+        timestamps = {
+            row.get("timestamp")
+            for row in sensors_payload
+            if isinstance(row, Mapping) and row.get("timestamp") is not None
+        }
+        route, agent, window, _ = self._build_agent_window({**payload, "seq_len": max(1, len(timestamps))})
+        values: dict[str, list[float]] = {}
+        units: dict[str, str] = {}
+        for idx, feature in enumerate(window.features):
+            observed = [float(row[idx]) for row, mask_row in zip(window.matrix, window.presence_mask) if mask_row[idx]]
+            if observed:
+                values[feature.name] = observed
+                units[feature.name] = feature.unit
+        return route.selected_agent_id, values, units
 
     def _build_agent_window(self, payload: Mapping[str, Any]):
         sensors_payload = payload.get("sensors") or payload.get("sensor_readings") or []
