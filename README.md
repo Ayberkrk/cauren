@@ -214,6 +214,20 @@ transfer, so no new probability is exposed through the API. Protocol, state
 results, uncertainty intervals, and reproduction steps are in
 [docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
 
+### Bridge model v4
+
+The v4 panel keeps every bridge-year with traffic, structure type, deck
+protection, reconstruction and inspection-timing items from the NBI. On the
+same 8,503 test bridges, a v4 booster reaches PR-AUC 0.706 against 0.646 for
+the same booster on v3-equivalent inputs (paired difference +0.060, interval
++0.049 to +0.070). Trained only on outcomes known by 2018 and scored on the
+2018 anchors, the gain holds (0.553 against 0.486, +0.067), and that
+out-of-time figure is the honest estimate of field performance. v4 does not
+transfer better to an unseen state (California 0.462 against 0.613), and a
+discrete-time hazard formulation added nothing over the v3 booster. Full
+tables, calibration and conformal results are in
+[docs/bridge-model-v4.md](docs/bridge-model-v4.md).
+
 ### KW51 bridge modal monitoring case study
 
 `tools/kw51_study.py` tests modal novelty detection on the KW51 steel railway
