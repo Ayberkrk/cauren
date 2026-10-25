@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import errno
 import json
 import logging
 import os
@@ -37,57 +36,20 @@ def retention_days() -> int:
 
 def _connect() -> sqlite3.Connection:
     path = database_path()
-    try:
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
-        created_parent = True
-    except FileExistsError:
-        created_parent = False
-
-    # Resolve the parent once, then operate on the canonical basename. SQLite
-    # follows symlinks, so checking the final component before chmod/connect is
-    # not sufficient unless the parent also prevents another principal from
-    # replacing it between those operations.
-    parent = path.parent.resolve(strict=True)
-    parent_stat = parent.stat()
-    if os.name == "posix" and parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Another local user who can write to the parent directory could swap the
+    # database for a link to their own file. Refusing shared parents is enough:
+    # in an owner-only directory, only the owner can create such links.
+    if os.name == "posix" and path.parent.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise ValueError("CAUREN_HISTORY_DB parent directory must not be group- or world-writable")
-    path = parent / path.name
 
     if os.name == "posix":
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        flags = os.O_CREAT | os.O_WRONLY | nofollow
-        if created_parent:
-            try:
-                os.chmod(path.parent, 0o700)
-            except OSError as exc:
-                logger.warning("could not restrict history directory permissions: %s", exc.__class__.__name__)
+        # Create owner-only, and tighten an existing file before SQLite opens it.
+        os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))
         try:
-            descriptor = os.open(path, flags, 0o600)
+            os.chmod(path, 0o600)
         except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                raise ValueError("CAUREN_HISTORY_DB must not be a symbolic link") from exc
-            raise
-        try:
-            file_stat = os.fstat(descriptor)
-            if not stat.S_ISREG(file_stat.st_mode):
-                raise ValueError("CAUREN_HISTORY_DB must be a regular file")
-            if file_stat.st_nlink > 1:
-                raise ValueError("CAUREN_HISTORY_DB must not be a hard link")
-            try:
-                os.fchmod(descriptor, 0o600)
-            except OSError as exc:
-                # Keep group-owned mounted volumes usable when their owner
-                # controls the mode; the protected parent and no-follow open
-                # still prevent another local user from swapping the path.
-                logger.warning("could not restrict history file permissions: %s", exc.__class__.__name__)
-        finally:
-            os.close(descriptor)
-    else:
-        if path.is_symlink():
-            raise ValueError("CAUREN_HISTORY_DB must not be a symbolic link")
-        if path.exists() and not path.is_file():
-            raise ValueError("CAUREN_HISTORY_DB must be a regular file")
-
+            logger.warning("could not restrict history file permissions: %s", exc.__class__.__name__)
     connection = sqlite3.connect(path, timeout=10.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 10000")

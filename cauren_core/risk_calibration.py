@@ -14,7 +14,6 @@ class SectorRiskProfile:
     compression_factor: float
     transient_min_scale: float
     transient_support_weight: float
-    physics_confirmation_floor: float
     pattern_weights: Mapping[str, float]
 
 
@@ -48,7 +47,6 @@ SECTOR_RISK_PROFILES: dict[str, SectorRiskProfile] = {
         compression_factor=0.84,
         transient_min_scale=0.58,
         transient_support_weight=0.58,
-        physics_confirmation_floor=0.24,
         pattern_weights={
             **_DEFAULT_PATTERN_WEIGHTS,
             "drift": 1.08,

@@ -82,29 +82,6 @@ def parse_sensor_readings(rows: Iterable[Mapping[str, Any]]) -> tuple[list[Senso
     return readings, rejected
 
 
-def sensor_layout_key(rows: Iterable[Mapping[str, Any]]) -> str:
-    counts: dict[str, int] = defaultdict(int)
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        name = str(
-            row.get("name")
-            or row.get("sensor_name")
-            or row.get("tag")
-            or row.get("dimension")
-            or row.get("sensor_id")
-            or row.get("id")
-            or ""
-        ).strip()
-        unit = str(row.get("unit") or "").strip()
-        key = f"{_normalize_key(name)}|{_normalize_key(unit)}"
-        counts[key] += 1
-    if not counts:
-        return "layout:empty"
-    encoded = ",".join(f"{key}:{counts[key]}" for key in sorted(counts))
-    return f"layout:{encoded}"
-
-
 class AgentSchemaAdapter:
     """Maps arbitrary sensor names into an agent-owned feature layout."""
 
