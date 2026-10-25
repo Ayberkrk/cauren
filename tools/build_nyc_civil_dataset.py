@@ -30,11 +30,6 @@ EXPECTED_SOURCES = {
     "dob_violations": "3h2n-5cm9",
     "dob_complaints": "eabe-havv",
 }
-FEATURE_FIELDS = (
-    "job_type", "work_type", "permit_type", "permit_subtype", "building_type",
-    "residential", "estimated_job_costs", "total_construction_floor_area",
-    "existing_no_of_stories", "proposed_no_of_stories", "filing_date", "approved_date",
-)
 DENIED_CERTIFICATE_STATUSES = ("cancel", "reject", "withdraw", "void", "denied")
 FINAL_CERTIFICATE_RE = re.compile(r"\bFINAL\b", re.IGNORECASE)
 TEMP_CERTIFICATE_RE = re.compile(r"\b(TEMP|TEMPORARY|INTERIM|TCO)\b", re.IGNORECASE)

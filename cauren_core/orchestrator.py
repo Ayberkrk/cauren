@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Mapping
 
-from cauren_agents.registry import AgentRegistry, build_default_registry, build_registry
+from cauren_agents.registry import AgentRegistry, build_default_registry
 from cauren_agents.router import AgentRouter
 
 from .adapter import AgentSchemaAdapter, parse_sensor_readings
@@ -22,18 +22,10 @@ class CaurenPipeline:
         self.core = core or CaurenCoreRuntime()
         self.normalizer = FeatureNormalizer(registry=self.registry)
         self._adapter_cache: dict[str, AgentSchemaAdapter] = {}
-        self.registry_version = "|".join(
-            f"{agent.schema.agent_id}:{agent.schema.version}"
-            for agent in sorted(self.registry.all(), key=lambda item: item.schema.agent_id)
-        )
 
     @classmethod
     def from_default_registry(cls) -> "CaurenPipeline":
         return cls(registry=build_default_registry(), core=CaurenCoreRuntime())
-
-    @classmethod
-    def from_agent_ids(cls, agent_ids: list[str] | tuple[str, ...]) -> "CaurenPipeline":
-        return cls(registry=build_registry(list(agent_ids)), core=CaurenCoreRuntime())
 
     def diagnose(self, payload: Mapping[str, Any]) -> CaurenDiagnosis:
         route, agent, window, normalization_trace = self._build_agent_window(payload)
