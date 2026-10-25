@@ -1,6 +1,7 @@
-import numpy as np
-import pandas as pd
 import pytest
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 from tools.bridge_hazard import (
     MONOTONE_INCREASING,
