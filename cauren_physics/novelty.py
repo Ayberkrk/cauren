@@ -42,6 +42,12 @@ PCA_RETAINED_VARIANCE = 0.90
 KNN_NEIGHBOURS = 10
 GP_BIN_WIDTH_C = 0.5
 GP_LENGTH_SCALES_C = (1.0, 2.0, 4.0, 8.0, 16.0)
+# Page's CUSUM on daily evidence -ln(p): under "unchanged" the increments
+# average about 1, so a drift of 1.5 lets the sum grow only when the
+# evidence is consistently stronger. The threshold is set for one false
+# alarm per year of healthy days on average.
+CUSUM_DRIFT = 1.5
+CUSUM_ARL0_DAYS = 365
 
 Segment = tuple[dt.datetime, dt.datetime]
 
@@ -197,6 +203,25 @@ class KNNDetector:
             nearest = np.partition(np.maximum(squared, 0.0), self.k - 1, axis=1)[:, : self.k]
             scores[start : start + self.chunk] = np.sqrt(nearest).mean(axis=1)
         return scores
+
+
+class MaxDeviationDetector:
+    """Largest robust z-score over the features.
+
+    A local change, such as a crack next to two of many strain gauges,
+    moves a few features far and leaves the rest alone. A distance over all
+    features adds the noise of every untouched one; the maximum does not.
+    Each feature is centred on its reference median and scaled by its
+    median absolute deviation.
+    """
+
+    def __init__(self, training: np.ndarray):
+        training = np.asarray(training, dtype=float)
+        self.centre = np.median(training, axis=0)
+        self.scale = 1.4826 * np.median(np.abs(training - self.centre), axis=0)
+
+    def score(self, samples: np.ndarray) -> np.ndarray:
+        return np.max(np.abs((np.asarray(samples, dtype=float) - self.centre) / self.scale), axis=1)
 
 
 class GaussianProcessBaseline:
@@ -450,6 +475,7 @@ def evaluate_states(
     states: dict[str, np.ndarray],
     *,
     alpha: float,
+    detectors: dict | None = None,
 ) -> dict:
     """Score feature samples of a healthy holdout and of known structural states.
 
@@ -457,13 +483,13 @@ def evaluate_states(
     (for example the frequencies identified in one window of a recording).
     Detectors are fitted on all reference rows and calibrated with
     leave-one-out reference scores; a row alarms when its conformal p-value
-    is at most ``alpha``. Raises ``ValueError`` when the reference has too
-    few rows for ``alpha``.
+    is at most ``alpha``. ``detectors`` replaces the default arms. Raises
+    ``ValueError`` when the reference has too few rows for ``alpha``.
     """
     reference = np.asarray(reference, dtype=float)
     check_alpha(len(reference), alpha)
     arms = {}
-    for name, detector_class in DETECTORS.items():
+    for name, detector_class in (DETECTORS if detectors is None else detectors).items():
         detector = detector_class(reference)
         calibration = leave_one_out_scores(detector_class, reference)
         summaries = {}
@@ -488,8 +514,106 @@ def evaluate_states(
     }
 
 
-def _arm_scorers(selected: np.ndarray, temperature: np.ndarray, covariates: np.ndarray) -> dict:
-    """One function per arm: fit on the hours in ``train``, score the hours in ``rows``."""
+class CointegrationDetector:
+    """Mahalanobis distance of the most stationary combinations of the frequencies.
+
+    Johansen's procedure (a VECM with one lag) ranks linear combinations of
+    the modes by how strongly they revert to their mean from one hour to the
+    next. Environmental effects move all modes together along slow common
+    trends; the combinations that stay stationary cancel those trends without
+    any measured covariate, and a structural change breaks them. The least
+    stationary ``common_trends`` combinations are dropped.
+    """
+
+    def __init__(self, previous: np.ndarray, current: np.ndarray, common_trends: int = 1):
+        previous = np.asarray(previous, dtype=float)
+        current = np.asarray(current, dtype=float)
+        steps = current - previous
+        r0 = steps - steps.mean(axis=0)
+        r1 = previous - previous.mean(axis=0)
+        count = len(steps)
+        s00 = r0.T @ r0 / count
+        s11 = r1.T @ r1 / count
+        s01 = r0.T @ r1 / count
+        lower = np.linalg.cholesky(s11)
+        inverse = np.linalg.inv(lower)
+        symmetric = inverse @ s01.T @ np.linalg.solve(s00, s01) @ inverse.T
+        eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
+        order = np.argsort(eigenvalues)[::-1]
+        keep = max(1, previous.shape[1] - common_trends)
+        self.eigenvalues = eigenvalues[order]
+        self.vectors = inverse.T @ eigenvectors[:, order[:keep]]
+        self.detector = MahalanobisDetector(current @ self.vectors)
+
+    def score(self, samples: np.ndarray) -> np.ndarray:
+        return self.detector.score(np.asarray(samples, dtype=float) @ self.vectors)
+
+
+def cusum_threshold(
+    reference_days: int,
+    arl0_days: int = CUSUM_ARL0_DAYS,
+    drift: float = CUSUM_DRIFT,
+    runs: int = 2000,
+    seed: int = 0,
+) -> float:
+    """CUSUM threshold whose average run length on unchanged days is ``arl0_days``.
+
+    Under exchangeability each daily p-value is uniform on
+    {1, ..., n + 1} / (n + 1), so the in-control run length can be simulated
+    exactly for the reference size. Runs are cut at four times the target,
+    which slightly understates long run lengths and so errs towards a higher
+    threshold.
+    """
+    rng = np.random.default_rng(seed)
+    length = 4 * arl0_days
+    ranks = rng.integers(1, reference_days + 2, size=(runs, length))
+    increments = -np.log(ranks / (reference_days + 1.0)) - drift
+    path = np.zeros((runs, length))
+    level = np.zeros(runs)
+    for day in range(length):
+        level = np.maximum(0.0, level + increments[:, day])
+        path[:, day] = level
+    peak = np.maximum.accumulate(path, axis=1)
+    for threshold in np.arange(0.5, 60.0, 0.25):
+        crossed = peak >= threshold
+        run_length = np.where(crossed.any(axis=1), crossed.argmax(axis=1) + 1, length)
+        if run_length.mean() >= arl0_days:
+            return float(threshold)
+    return float("inf")
+
+
+def cusum_first_alarm(daily_p_values: dict[dt.date, float], segment: Segment, threshold: float,
+                      drift: float = CUSUM_DRIFT) -> dict:
+    """First day in a segment on which the CUSUM of -ln(p) reaches the threshold.
+
+    The sum restarts at the segment's start, so a segment is judged on its
+    own evidence.
+    """
+    start, end = segment
+    level = 0.0
+    peak = 0.0
+    for day in sorted(daily_p_values):
+        if not start.date() <= day < end.date():
+            continue
+        level = max(0.0, level - math.log(daily_p_values[day]) - drift)
+        peak = max(peak, level)
+        if level >= threshold:
+            return {"first_alarm": day.isoformat(), "delay_days": (day - start.date()).days, "peak": level}
+    return {"first_alarm": None, "delay_days": None, "peak": peak}
+
+
+def _arm_scorers(
+    selected: np.ndarray,
+    temperature: np.ndarray,
+    covariates: np.ndarray,
+    previous_row: np.ndarray,
+    environment: np.ndarray | None,
+) -> dict:
+    """One function per arm: fit on the hours in ``train``, score the hours in ``rows``.
+
+    ``previous_row`` holds, for each hour, the index of the hour one hour
+    earlier, or -1 when that hour is missing.
+    """
 
     def raw_frequencies(train, rows):
         return MahalanobisDetector(selected[train]).score(selected[rows])
@@ -510,13 +634,59 @@ def _arm_scorers(selected: np.ndarray, temperature: np.ndarray, covariates: np.n
     def knn(train, rows):
         return KNNDetector(selected[train]).score(selected[rows])
 
-    return {
+    def cointegration(train, rows):
+        pairs = np.flatnonzero(train & (previous_row >= 0))
+        pairs = pairs[train[previous_row[pairs]]]
+        detector = CointegrationDetector(selected[previous_row[pairs]], selected[pairs])
+        return detector.score(selected[rows])
+
+    scorers = {
         "raw_frequencies": raw_frequencies,
         "temperature_normalized": temperature_normalized,
         "gp_normalized": gp_normalized,
         "pca_residual": pca_residual,
         "knn": knn,
+        "cointegration": cointegration,
     }
+    if environment is not None:
+        extended = np.column_stack((covariates, environment))
+
+        def environment_normalized(train, rows):
+            baseline = fit_temperature_baseline(
+                extended[train], selected[train], feature_names=tuple(f"x{i}" for i in range(extended.shape[1]))
+            )
+            fitted = baseline.residuals(extended[train], selected[train])
+            return MahalanobisDetector(fitted).score(baseline.residuals(extended[rows], selected[rows]))
+
+        scorers["environment_normalized"] = environment_normalized
+    return scorers
+
+
+def _arm_summary(daily: dict, reference_scores, alpha: float, protocol: StudyProtocol, threshold: float) -> dict:
+    p_values = dict(zip(daily, conformal_p_values(reference_scores, list(daily.values()))))
+    return {
+        "control_limit": conformal_limit(reference_scores, alpha),
+        "reference": alarm_summary(daily, reference_scores, alpha, protocol.reference),
+        "holdout": alarm_summary(daily, reference_scores, alpha, protocol.holdout),
+        "changed": alarm_summary(daily, reference_scores, alpha, protocol.changed),
+        "cusum": {
+            "threshold": threshold,
+            "holdout": cusum_first_alarm(p_values, protocol.holdout, threshold),
+            "changed": cusum_first_alarm(p_values, protocol.changed, threshold),
+        },
+        "daily": [
+            {"date": day.isoformat(), "score": value, "p_value": float(p_values[day])} for day, value in daily.items()
+        ],
+    }
+
+
+def _daily_means(times, values: np.ndarray, complete: np.ndarray, min_hours: int = MIN_HOURS_PER_DAY) -> dict:
+    """Mean of each day's complete hours, for days with at least ``min_hours`` of them."""
+    by_day: dict[dt.date, list[int]] = {}
+    for index, (stamp, used) in enumerate(zip(times, complete)):
+        if used:
+            by_day.setdefault(stamp.date(), []).append(index)
+    return {day: values[rows].mean(axis=0) for day, rows in sorted(by_day.items()) if len(rows) >= min_hours}
 
 
 def _leave_one_day_out(scorer, times, train: np.ndarray, reference_days) -> dict[dt.date, float]:
@@ -544,15 +714,18 @@ def run_protocol(
     modes: list[int] | None = None,
     alpha: float = ALPHA,
     calibration: str = "leave_one_day_out",
+    environment: np.ndarray | None = None,
 ) -> dict:
     """Run every detector arm on hourly frequencies and temperature.
 
     ``modes`` overrides the reference-only mode selection; a study that
     does so must report the result as post hoc. Reference days are scored
     by a model fitted without them (``calibration="leave_one_day_out"``);
-    ``"in_sample"`` keeps the earlier behaviour for comparison. Raises
-    ``ValueError`` before scoring when the reference period has too few
-    days for ``alpha``.
+    ``"in_sample"`` keeps the earlier behaviour for comparison.
+    ``environment`` adds hourly covariates (columns) to a linear arm; hours
+    missing any of them are then dropped for every arm, so all arms are
+    compared on the same hours. Raises ``ValueError`` before scoring when
+    the reference period has too few days for ``alpha``.
     """
     if calibration not in ("leave_one_day_out", "in_sample"):
         raise ValueError(f"unknown calibration {calibration!r}")
@@ -560,9 +733,17 @@ def run_protocol(
     modes = select_modes(frequencies_hz, reference) if modes is None else list(modes)
     selected = frequencies_hz[:, modes]
     complete = np.all(np.isfinite(selected), axis=1) & np.isfinite(temperature_c)
+    if environment is not None:
+        environment = np.asarray(environment, dtype=float).reshape(len(times), -1)
+        complete &= np.all(np.isfinite(environment), axis=1)
+        environment = np.where(complete[:, None], environment, 0.0)
     selected = np.where(complete[:, None], selected, 0.0)
     temperature = np.where(np.isfinite(temperature_c), temperature_c, 0.0)
     covariates = temperature_features(temperature)
+    stamps = np.array(times, dtype="datetime64[s]")
+    previous_row = np.full(len(times), -1)
+    follows = np.flatnonzero(np.diff(stamps) == np.timedelta64(3600, "s")) + 1
+    previous_row[follows] = follows - 1
 
     train = reference & complete
     reference_days = daily_medians([stamp for stamp, used in zip(times, train) if used], np.zeros(int(train.sum())))
@@ -570,28 +751,31 @@ def run_protocol(
     baseline = fit_temperature_baseline(covariates[train], selected[train])
     residuals = baseline.residuals(covariates, selected)
 
+    threshold = cusum_threshold(len(reference_days))
     arms = {}
-    for name, scorer in _arm_scorers(selected, temperature, covariates).items():
+    for name, scorer in _arm_scorers(selected, temperature, covariates, previous_row, environment).items():
         scores = np.full(len(times), np.nan)
         scores[complete] = scorer(train, complete)
         daily = daily_medians(times, scores)
         if calibration == "leave_one_day_out":
             daily.update(_leave_one_day_out(scorer, times, train, reference_days))
         reference_scores = [daily[day] for day in reference_days]
-        arms[name] = {
-            "control_limit": conformal_limit(reference_scores, alpha),
-            "reference": alarm_summary(daily, reference_scores, alpha, protocol.reference),
-            "holdout": alarm_summary(daily, reference_scores, alpha, protocol.holdout),
-            "changed": alarm_summary(daily, reference_scores, alpha, protocol.changed),
-            "daily": [
-                {"date": day.isoformat(), "score": value, "p_value": float(p_value)}
-                for (day, value), p_value in zip(
-                    daily.items(), conformal_p_values(reference_scores, list(daily.values()))
-                )
-            ],
-        }
+        arms[name] = _arm_summary(daily, reference_scores, alpha, protocol, threshold)
         if name == "pca_residual":
             arms[name]["retained_components"] = PCAResidualDetector(selected[train]).retained
+
+    # Average the residuals of each day before scoring: hourly identification
+    # noise shrinks with the number of hours, slow environmental variation
+    # does not, so the detector sees mostly what a day-scale change would move.
+    daily_features = _daily_means(times, residuals, complete)
+    reference_matrix = np.array([daily_features[day] for day in reference_days])
+    detector = MahalanobisDetector(reference_matrix)
+    days = list(daily_features)
+    daily = dict(zip(days, detector.score(np.array([daily_features[day] for day in days]))))
+    if calibration == "leave_one_day_out":
+        daily.update(zip(reference_days, leave_one_out_scores(MahalanobisDetector, reference_matrix)))
+    reference_scores = [daily[day] for day in reference_days]
+    arms["daily_mean_normalized"] = _arm_summary(daily, reference_scores, alpha, protocol, threshold)
 
     holdout = segment_mask(times, protocol.holdout) & complete
     changed = segment_mask(times, protocol.changed) & complete
@@ -606,6 +790,7 @@ def run_protocol(
     return {
         "alpha": alpha,
         "calibration": calibration,
+        "cusum_threshold": threshold,
         "reference_days": len(reference_days),
         "p_value_floor": 1.0 / (len(reference_days) + 1.0),
         "modes": modes,
@@ -628,15 +813,18 @@ def run_protocol(
 def markdown_table(result: dict, changed_label: str = "Post-change") -> str:
     lines = [
         f"| Arm | Holdout false-alarm days | {changed_label} days alarmed | First alarm (delay) "
-        f"| Holdout min p | Holdout max / limit | {changed_label} min / limit |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        f"| Holdout min p | Holdout max / limit | {changed_label} min / limit | CUSUM holdout alarm |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for name, arm in result["arms"].items():
         holdout, changed = arm["holdout"], arm["changed"]
         delay = f"{changed['first_alarm']} ({changed['delay_days']} d)" if changed["first_alarm"] else "none"
+        cusum = arm["cusum"]["holdout"]
+        cusum_cell = f"day {cusum['delay_days']}" if cusum["first_alarm"] else "none"
         lines.append(
             f"| {name} | {holdout['alarmed_days']}/{holdout['days']} ({100 * holdout['alarm_rate']:.1f}%) "
             f"| {changed['alarmed_days']}/{changed['days']} ({100 * changed['alarm_rate']:.1f}%) | {delay} "
-            f"| {holdout['min_p_value']:.3f} | {holdout['max_over_limit']:.2f} | {changed['min_over_limit']:.2f} |"
+            f"| {holdout['min_p_value']:.3f} | {holdout['max_over_limit']:.2f} | {changed['min_over_limit']:.2f} "
+            f"| {cusum_cell} |"
         )
     return "\n".join(lines)

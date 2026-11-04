@@ -31,6 +31,7 @@ either misses small damage or alarms every cold snap.
 |---|---|---|---|
 | **KW51**, steel railway bowstring, Leuven (Maes and Lombaert) | 15 months of hourly modal frequencies and temperatures; diagonal connections strengthened in 2019 | Open, Zenodo [3745914](https://doi.org/10.5281/zenodo.3745914), CC BY-NC-SA 4.0 | Done, see [case study](docs/kw51-case-study.md) |
 | **Hell Bridge Test Arena**, riveted steel truss railway bridge (Norway) | Two undamaged recordings and eight imposed damage states, shaker excitation, 100 Hz | Open, Zenodo [14632942](https://doi.org/10.5281/zenodo.14632942), CC BY 4.0 | Done, see [case study](docs/hbta-case-study.md) |
+| **Vänersborg**, riveted steel bascule railway bridge (Sweden) | 64 bridge openings with strain, acceleration and weather; a real counterweight truss fracture in March 2023 | Open, Zenodo [8300495](https://doi.org/10.5281/zenodo.8300495), CC BY 4.0 | Done, see [case study](docs/vanersborg-case-study.md) |
 | **Z24**, post-tensioned concrete box girder (Switzerland) | One year of monitoring with air and soil temperatures, then progressive damage tests before demolition | On request from [KU Leuven](https://bwk.kuleuven.be/bwm/z24), non-commercial research | Access requested |
 
 No monitoring data is committed to this repository. Each study downloads
@@ -48,27 +49,32 @@ particular forbid passing the data to third parties.
    bin are not counted as drift. See
    [OMA and Timoshenko integration](docs/oma-timoshenko-integration.md).
    For shaker tests with a measured input (HBTA), the H1 frequency response
-   is used instead.
+   is used instead; for bridge openings (Vänersborg), the strain change of
+   each gauge at fixed leaf angles.
 2. **Environmental normalization.** Each mode's frequency is modelled
    against temperature, either bilinear (the slope can change below
-   freezing) or with a Gaussian process, and detection runs on the
-   residuals.
-3. **Novelty detection.** Five arms are fitted on a reference period only:
-   Mahalanobis distance of the raw frequencies and of the bilinear and
-   Gaussian process residuals, a PCA residual, and the mean distance to the
-   nearest reference samples. Each reference day is scored by a model
-   fitted without it. Each later day gets a conformal p-value against
+   freezing), with a Gaussian process, or with weather-station covariates
+   added, and detection runs on the residuals.
+3. **Novelty detection.** Seven arms are fitted on a reference period only:
+   Mahalanobis distance of the raw frequencies, of the bilinear and Gaussian
+   process residuals and of daily-averaged residuals, a PCA residual, the
+   mean distance to the nearest reference samples, and cointegration
+   (combinations of the modes that cancel their common environmental
+   trend). Each reference day is scored by a model fitted without it. Each later day gets a conformal p-value against
    those reference days, and alarms when p <= alpha (0.01 by default). If a
    healthy day resembles the reference days, its false-alarm probability is
    at most alpha. A reference too short for the chosen rate is refused
    before anything is scored, rather than producing a detector that can
-   never alarm.
+   never alarm. A CUSUM of daily evidence is run alongside as a sequential
+   test.
 4. **Identification uncertainty.** The error of each identified frequency
    is estimated from consecutive hourly estimates (KW51) or from the
    window-to-window scatter of one recording (HBTA), and every shift is
    also reported in units of it.
 5. **Evaluation.** False alarms are counted on a later healthy holdout and
    detections after the known change, with the delay to the first alarm.
+   On KW51, frequency drops of known size are also injected into the
+   healthy holdout to find the smallest change each arm detects.
 
 Steps 2 to 5 live in `cauren_physics/novelty.py`, so every bridge is
 scored by the same code; a study only supplies its data and segment
@@ -81,54 +87,59 @@ baseline.
 
 ## Results so far
 
-**KW51.** All five detectors had 0 of 44 false-alarm days in the spring
-2019 holdout and alarmed on every post-retrofit day from the first one.
-The retrofit moved two modes by about 2%, which makes this an easy case.
-The k-nearest-neighbour arm separated it by the widest margin (lowest
-post-retrofit day at 4.25 times its limit). In a post-hoc rerun on the
-three least-shifted modes, Gaussian process normalization widened the
-margin to 1.95 times the limit, against 1.54 for the bilinear model and
-1.12 for raw frequencies, while the PCA residual alarmed on 16% of the
-warmer holdout days. Hourly identification noise is 0.08 to 0.49% of each
-frequency and 15 to 83% of what temperature normalization leaves. Details
-are in the [KW51 case study](docs/kw51-case-study.md).
+**KW51.** Every arm had 0 of 44 false-alarm days in the spring 2019 holdout
+and alarmed on every post-retrofit day from the first. The retrofit moved
+two modes by about 2%, an easy case, so drops of known size were injected
+into the healthy holdout: cointegration and k nearest neighbours detect a
+0.5% drop of the best-observed modes, or of all modes together, on at
+least 90% of days, where the Mahalanobis arms need 1%. Weather covariates
+beyond the deck temperature change little, and a CUSUM raises false alarms
+in the warmer holdout. Hourly identification noise is 0.08 to 0.49% of each
+frequency. Details are in the [KW51 case study](docs/kw51-case-study.md).
 
 **Hell Bridge Test Arena.** Fitted on one undamaged recording, the
 detectors that respond to the eight imposed damage states also alarm on
 every window of the second undamaged recording, five days later. Several
 frequencies moved by 1 to 1.7% between the two healthy sessions, about five
 times the scatter within one recording and as much as most damage states.
-With only two healthy sessions, damage cannot be told apart from a new
-session. Details are in the [HBTA case study](docs/hbta-case-study.md).
+Details are in the [HBTA case study](docs/hbta-case-study.md).
 
-The two studies are compared, and the candidate data sets for a bridge with
-both real damage and a long healthy reference are listed, in
-[Results across bridges](docs/results-summary.md).
+**Vänersborg.** The two strain gauges next to a real fracture moved by 5.4
+and 4.0 reference sigmas, but the pre-registered detectors missed it,
+because one erratic gauge inflated their calibration. Excluding that gauge
+by a reference-only rule, added after the miss, the Mahalanobis distance
+flagged all six openings after the fracture and one of 17 healthy ones.
+Details are in the [Vänersborg case study](docs/vanersborg-case-study.md).
+
+The three studies are compared in [Results across bridges](docs/results-summary.md).
 
 ## Limitations
 
-- Neither bridge combines real damage with a long healthy reference under
-  varying temperature: KW51's change is a strengthening that raised some
-  frequencies, and HBTA has damage but only two healthy recordings.
-- Temperature is the only environmental covariate used. Humidity, solar
-  radiation and traffic are not modelled.
+- No bridge combines real damage with a healthy reference spanning the
+  seasons: KW51's change is a strengthening, HBTA has two healthy
+  recordings, and Vänersborg's reference covers 11 winter days.
+- The Vänersborg detection depends on a data-quality rule added after the
+  pre-registered analysis missed the fracture.
 - Short holdouts leave wide uncertainty on false-alarm rates: 0 of 44 days
   still allows a true daily rate up to about 7%.
 - The false-alarm guarantee assumes healthy data resembles the reference.
   Correlated days, seasons outside the reference range, and new measurement
-  sessions weaken it, as HBTA shows.
+  sessions weaken it, as HBTA and the CUSUM on KW51 show.
 
 ## Reproduce
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 34 tests with pytest only (61 total with numpy, scipy and timoshenko-engine)
+python3 -m pytest tests/            # 34 tests with pytest only (69 total with numpy, scipy and timoshenko-engine)
 
-pip install -e '.[study]'           # numpy, scipy and h5py for the case studies
+pip install -e '.[study]'           # numpy, scipy, h5py and pandas for the case studies
 python3 tools/kw51_study.py --download
 python3 tools/kw51_study.py
+python3 tools/kw51_study.py --sensitivity
 python3 tools/hbta_study.py --fetch      # about 145 MB of the 2.5 GB record
 python3 tools/hbta_study.py
+python3 tools/vanersborg_study.py --fetch  # 550 MB download, deleted after
+python3 tools/vanersborg_study.py --exclude-erratic
 ```
 
 Single-channel identification, optionally with a baseline and an FE

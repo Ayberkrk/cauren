@@ -155,6 +155,15 @@ def test_run_protocol_detects_a_local_change_smaller_than_the_seasonal_swing():
     assert normalized["changed"]["delay_days"] == 0
     assert normalized["changed"]["min_p_value"] == pytest.approx(1 / 121)
     assert len(normalized["daily"]) == 200
+    assert {"cointegration", "knn", "gp_normalized", "daily_mean_normalized"} <= set(result["arms"])
+    assert "environment_normalized" not in result["arms"]
+    assert result["arms"]["cointegration"]["cusum"]["threshold"] == result["cusum_threshold"]
+
+    humidity = rng.uniform(40.0, 90.0, len(times))
+    with_environment = novelty.run_protocol(
+        times, frequencies, temperature, protocol, expected_df_over_f=STEEL_DF_OVER_F_PER_K, environment=humidity
+    )
+    assert with_environment["arms"]["environment_normalized"]["changed"]["alarm_rate"] == 1.0
     assert result["frequency_ratio"]["pattern"] == "local"
     assert all(row["sign_ok"] for row in result["temperature_sensitivity"])
     assert "Post-change days alarmed" in novelty.markdown_table(result)
@@ -268,3 +277,37 @@ def test_identification_uncertainty_separates_hourly_noise_from_slow_drift():
     # Noise variance 4e-6 against a total of 4e-6 + 8e-6.
     assert result["noise_share"][0] == pytest.approx(1 / 3, abs=0.03)
     assert result["hourly_pairs"] < len(times) - 1
+
+
+def test_cointegration_detector_follows_a_common_trend_and_flags_a_broken_relation():
+    rng = np.random.default_rng(13)
+    trend = np.cumsum(rng.normal(0.0, 0.05, 3001))
+    levels = np.column_stack((trend, 2.0 * trend)) + rng.normal(0.0, 0.01, (3001, 2))
+    detector = novelty.CointegrationDetector(levels[:-1], levels[1:])
+    far_along_trend = np.array([[trend.max() + 1.0, 2.0 * (trend.max() + 1.0)]])
+    # The stationary combination y2 - 2 y1 has a noise sigma of about 0.022.
+    broken = np.array([[trend.mean(), 2.0 * trend.mean() + 0.4]])
+    assert detector.score(far_along_trend)[0] < 3.0 < 10.0 < detector.score(broken)[0]
+    assert novelty.MahalanobisDetector(levels).score(far_along_trend)[0] > 3.0
+
+
+def test_cusum_threshold_and_first_alarm():
+    threshold = novelty.cusum_threshold(130, runs=500)
+    assert 0.0 < threshold < novelty.cusum_threshold(130, arl0_days=1000, runs=500)
+    start = dt.datetime(2020, 1, 1)
+    days = [start.date() + dt.timedelta(days=offset) for offset in range(30)]
+    quiet = novelty.cusum_first_alarm(dict.fromkeys(days, 0.5), (start, start + dt.timedelta(days=30)), threshold)
+    assert quiet["first_alarm"] is None
+    # Each day at the p-value floor adds -ln(1/131) - 1.5, about 3.4.
+    strong = novelty.cusum_first_alarm(dict.fromkeys(days, 1 / 131), (start, start + dt.timedelta(days=30)), 5.0)
+    assert strong["delay_days"] == 1
+
+
+def test_max_deviation_detector_sees_a_change_in_one_of_many_features():
+    rng = np.random.default_rng(14)
+    training = rng.normal(size=(40, 30))
+    local = np.zeros((1, 30))
+    local[0, 7] = 6.0
+    spread = np.full((1, 30), 1.2)
+    detector = novelty.MaxDeviationDetector(training)
+    assert detector.score(local)[0] > 4.0 > detector.score(spread)[0]

@@ -1,6 +1,6 @@
 # KW51 railway bridge case study
 
-`tools/kw51_study.py` runs five modal novelty detectors on one real bridge
+`tools/kw51_study.py` runs seven modal novelty detectors on one real bridge
 with a known change of state. It answers a narrow question: on KW51, does a
 detector fitted on healthy data stay quiet on later healthy data and alarm
 after the retrofit, and does temperature normalization help?
@@ -78,6 +78,30 @@ cannot establish false-alarm or detection rates for other bridges.
    hours in standardized frequency space. It fits no ellipse and no
    temperature model, so it follows a curved healthy pattern, such as the
    steeper slope below freezing, from the reference hours themselves.
+6. **Cointegration:** Johansen's procedure (one-lag VECM) ranks linear
+   combinations of the modes by how strongly they revert to their mean from
+   hour to hour. The least stationary combination, the common
+   environmental trend, is dropped and the Mahalanobis distance is computed
+   on the other four. No temperature is used.
+7. **Daily mean normalized:** the bilinear residuals of each day's hours are
+   averaged before scoring, and the Mahalanobis distance is computed on one
+   vector per day. Averaging shrinks the hourly identification noise by the
+   number of hours, so this arm uses the identification uncertainty in the
+   decision rather than only reporting it. Its temperature model is fitted
+   on all reference hours; only the detector is left one day out.
+
+Two additions are run alongside the arms:
+
+- **Weather covariates** (`--environment`): an eighth arm regresses each
+  mode on the bilinear deck temperature plus air temperature, relative
+  humidity, global solar radiation and wind speed from the weather station.
+  Hours missing any of these are dropped for every arm, so this run is
+  compared within itself.
+- **Sequential test:** for every arm, Page's CUSUM of the daily evidence
+  -ln(p) with a drift of 1.5, restarted at the start of the holdout and of
+  the changed segment. Its threshold (5.0) is simulated so that on days
+  exchangeable with the reference it raises one false alarm per 365 days on
+  average.
 
 Timoshenko is optional. `fit_environmental_baseline` is on Timoshenko's main
 branch and not in the released `timoshenko-engine` 2.1.0, so the script falls
@@ -97,8 +121,10 @@ Pre-registered mode set (2, 4, 5, 8, 12):
 | Gaussian process normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.031 | 0.50 | 2.10 |
 | PCA residual | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.49 | 2.55 |
 | k nearest neighbours | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.069 | 0.56 | 4.25 |
+| Cointegration | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.023 | 0.99 | 4.78 |
+| Daily mean normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.046 | 0.21 | 1.07 |
 
-All five arms meet both targets (holdout false-alarm rate at most 5%,
+All seven arms meet both targets (holdout false-alarm rate at most 5%,
 at least 90% of post-retrofit days alarmed) and alarm on the first scored
 day. Every post-retrofit day reaches the smallest attainable p-value,
 1/131. The holdout min p column is the strongest evidence any healthy
@@ -120,10 +146,11 @@ The comparison also does not stress temperature normalization much. The
 changed segment (October to January) has deck temperatures from 0.7 to
 22.7 C, inside the reference range of -2.9 to 19.0 C, so the raw arm sees the
 same seasonal pattern it was trained on. The warmer holdout (1.9 to 26.3 C)
-is the real test of environmental robustness, and all five arms stayed
-below 0.6 of their limits there. The k-nearest-neighbour arm separates the
-retrofit by the widest margin (the lowest post-retrofit day at 4.25 times
-its limit).
+is the real test of environmental robustness. Cointegration separates the
+retrofit by the widest margin (4.78) but comes closest to alarming on the
+holdout (0.99 of its limit); k nearest neighbours reaches 4.25 with the
+holdout at 0.56. The daily mean arm is the quietest on the holdout (0.21)
+and the closest to missing the retrofit (1.07).
 
 ### Post-hoc stress test
 
@@ -139,6 +166,8 @@ pre-registered result (`--modes 2 4 8`):
 | Gaussian process normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.015 | 0.89 | 1.95 |
 | PCA residual | 7/44 (15.9%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.008 | 1.54 | 2.70 |
 | k nearest neighbours | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.061 | 0.66 | 3.06 |
+| Cointegration | 7/44 (15.9%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.008 | 1.32 | 2.40 |
+| Daily mean normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.023 | 0.75 | 2.07 |
 
 With small shifts, temperature normalization widens the post-retrofit margin
 (lowest daily score 1.54 times the limit with the bilinear model and 1.95
@@ -150,7 +179,57 @@ and its single residual direction picks up the warmer spring temperatures,
 which lie outside the reference range: 16% of holdout days alarm, far above
 the 1% the p-value rule promises for days that resemble the reference. Those
 spring days do not resemble the reference, which is exactly the
-exchangeability the guarantee assumes.
+exchangeability the guarantee assumes. Cointegration fails the same way
+with three modes: once the common trend is dropped, two combinations are
+left and the warm days break them. Averaging each day before scoring helps
+here (2.07 against 1.54 for the same bilinear residuals scored hourly).
+
+### Weather covariates
+
+Adding air temperature, humidity, global radiation and wind speed changes
+little. On the 38 holdout days with complete weather data, the weather arm
+separates the pre-registered retrofit by 1.96 times its limit against 1.90
+for deck temperature alone, and on the post-hoc subset by 1.34 against 1.41.
+The deck temperature already carries most of what the weather explains.
+
+### Sequential test
+
+The CUSUM of daily evidence raised a false alarm in the healthy holdout for
+every arm but PCA on the pre-registered modes, 19 to 23 days into it (6 days
+for cointegration on the post-hoc subset). The holdout is warmer than the
+reference, so its p-values are slightly but persistently smaller than those
+of days like the reference. The daily test absorbs that, the cumulative sum
+does not. A sequential test needs a reference that covers the season it is
+applied in; with this reference it is not usable.
+
+### Synthetic damage
+
+The retrofit is one large change. To compare the arms on changes of known
+size, each pre-registered mode, and all five together, was lowered by 0.1,
+0.25, 0.5, 1 and 2% in the 44 healthy holdout days only, and the study was
+rerun (`--sensitivity`). The table gives the smallest drop that alarms on at
+least 90% of the holdout days; no arm alarmed on any unshifted holdout day.
+
+| Arm | Mode 2 (1.89 Hz) | Mode 4 (2.58 Hz) | Mode 5 (2.93 Hz) | Mode 8 (4.11 Hz) | Mode 12 (6.33 Hz) | All modes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Raw frequencies | > 2% | > 2% | 2% | 1% | > 2% | 1% |
+| Temperature normalized | > 2% | > 2% | 2% | 1% | > 2% | 1% |
+| Gaussian process normalized | > 2% | > 2% | 2% | 1% | > 2% | 1% |
+| PCA residual | > 2% | > 2% | 0.5% | > 2% | 2% | 1% |
+| k nearest neighbours | 2% | > 2% | 1% | 0.5% | 2% | 0.5% |
+| Cointegration | 2% | 2% | 0.5% | 0.5% | 2% | 0.5% |
+| Daily mean normalized | > 2% | > 2% | > 2% | 2% | > 2% | 2% |
+
+Cointegration and k nearest neighbours detect drops half as large as the
+Mahalanobis arms for most modes and for a uniform stiffness loss. Modes 2
+and 4, with the largest identification noise, hide a drop of up to 2% from
+almost every arm. The daily mean arm, which looked good on the post-hoc
+retrofit subset, is the least sensitive here: averaging removes hourly
+noise, but the day-to-day environmental variation it is then compared with
+remains, and with 130 reference days its covariance is less well estimated
+than the hourly arms'. A drop that holds for a whole holdout season under
+the holdout's real weather is a favourable case; a change that develops
+slowly, or arrives in a season unlike the reference, would be harder.
 
 ## Identification uncertainty
 
@@ -223,6 +302,9 @@ moves.
   daily rate up to about 7% (95% upper bound).
 - Only deck temperature is used as a covariate. Humidity, train loading and
   the identification uncertainty of each hourly estimate are not modelled.
+- The synthetic drops are uniform over the holdout and exact; real damage
+  also changes damping and mode shapes, and identification of a damaged
+  mode can fail.
 - The identification noise estimate assumes the true frequency is constant
   within an hour; train passages and fast temperature changes make it a
   slight overestimate.
@@ -232,7 +314,7 @@ moves.
   shows.
 - With 130 reference days the strongest attainable evidence is p = 1/131;
   every detection here sits at that floor, so the p-values cannot rank the
-  five arms' post-retrofit evidence against each other.
+  arms' post-retrofit evidence against each other.
 
 The control rule changed from the 99th percentile of the reference daily
 scores to the conformal p-value, and later to leave-one-day-out calibration.
@@ -246,6 +328,8 @@ every other alarm count is unchanged across the three rules.
 pip install -e '.[study]'
 python3 tools/kw51_study.py --download
 python3 tools/kw51_study.py --modes 2 4 8
+python3 tools/kw51_study.py --environment
+python3 tools/kw51_study.py --sensitivity       # about 3 minutes
 ```
 
 Install Timoshenko from its main branch to use `fit_environmental_baseline`

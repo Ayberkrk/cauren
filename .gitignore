@@ -64,3 +64,7 @@ data/z24/
 
 # Hell Bridge Test Arena data (Zenodo 14028239, CC BY 4.0, about 2.5 GB).
 data/hbta/
+
+# Vänersborg bridge openings (Zenodo 8300495, CC BY 4.0). Only derived
+# features are kept; tools/vanersborg_study.py --fetch streams the raw files.
+data/vanersborg/

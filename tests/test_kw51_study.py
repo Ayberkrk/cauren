@@ -26,3 +26,11 @@ def test_kw51_protocol_segments_are_ordered_and_skip_the_retrofit_works():
     assert protocol.reference[1] == protocol.holdout[0]
     assert protocol.holdout[1] == dt.datetime(2019, 5, 15)
     assert protocol.changed[0] == dt.datetime(2019, 9, 28)
+
+
+def test_inject_shift_scales_only_the_holdout_of_the_chosen_modes():
+    times = [dt.datetime(2019, 3, 31, 22), dt.datetime(2019, 4, 2), dt.datetime(2019, 9, 30)]
+    data = {"times": times, "frequencies_hz": np.full((3, 3), 2.0)}
+    shifted = study.inject_shift(data, [1], -0.01)
+    np.testing.assert_allclose(shifted["frequencies_hz"], [[2.0, 2.0, 2.0], [2.0, 1.98, 2.0], [2.0, 2.0, 2.0]])
+    assert data["frequencies_hz"][1, 1] == 2.0

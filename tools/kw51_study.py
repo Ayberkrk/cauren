@@ -59,6 +59,16 @@ PROTOCOL = StudyProtocol(
     changed=(dt.datetime(2019, 9, 28), dt.datetime(2020, 1, 16)),
 )
 
+# Weather-station covariates for the environment arm: air temperature,
+# relative humidity, global solar radiation and wind speed.
+ENVIRONMENT_CHANNELS = ("tVL", "rhVL", "grVL", "wsVL")
+
+# Synthetic damage for the sensitivity study: relative frequency drops
+# applied to the healthy holdout, one monitored mode at a time and to all
+# modes at once (a uniform stiffness loss).
+SENSITIVITY_SHIFTS = (-0.001, -0.0025, -0.005, -0.01, -0.02)
+DETECTED_SHARE = 0.9
+
 # Structural steel loses roughly 0.03 percent of its Young's modulus per
 # kelvin near room temperature. With f proportional to sqrt(E), the
 # material-only frequency sensitivity is about half of that.
@@ -102,11 +112,18 @@ def load_tracked_modes(path: Path) -> dict:
         "times": datenum_to_datetime(modes.sdn),
         "frequencies_hz": np.asarray(modes.f, dtype=float),
         "deck_temperature_c": np.asarray(modes.env[:, env_labels.index("tBD31A")], dtype=float),
+        "environment": np.column_stack(
+            [np.asarray(modes.env[:, env_labels.index(name)], dtype=float) for name in ENVIRONMENT_CHANNELS]
+        ),
     }
 
 
-def run_study(data: dict, modes: list[int] | None = None) -> dict:
-    """Run every detector arm. ``modes`` overrides the reference-only mode selection."""
+def run_study(data: dict, modes: list[int] | None = None, environment: bool = False) -> dict:
+    """Run every detector arm. ``modes`` overrides the reference-only mode selection.
+
+    ``environment`` adds the weather-station arm; hours missing any weather
+    channel are then dropped for every arm.
+    """
     result = run_protocol(
         data["times"],
         data["frequencies_hz"],
@@ -114,9 +131,71 @@ def run_study(data: dict, modes: list[int] | None = None) -> dict:
         PROTOCOL,
         expected_df_over_f=EXPECTED_DF_OVER_F_PER_K,
         modes=modes,
+        environment=data["environment"] if environment else None,
     )
     result["deck_temperature_range_c"] = result.pop("temperature_range_c")
     return {"source": {"zenodo_doi": ZENODO_DOI, "license": DATA_LICENSE}, **result}
+
+
+def inject_shift(data: dict, columns: list[int], relative_shift: float) -> dict:
+    """Copy of ``data`` with the holdout frequencies of ``columns`` scaled by ``1 + relative_shift``.
+
+    The holdout is healthy and unseen, so a detector's alarm rate on it
+    after the injection is its detection rate for a change of exactly that
+    size, under the holdout's real weather.
+    """
+    holdout = np.array([PROTOCOL.holdout[0] <= stamp < PROTOCOL.holdout[1] for stamp in data["times"]])
+    frequencies = data["frequencies_hz"].copy()
+    frequencies[np.ix_(holdout, columns)] *= 1.0 + relative_shift
+    return {**data, "frequencies_hz": frequencies}
+
+
+def sensitivity_study(data: dict, shifts=SENSITIVITY_SHIFTS) -> dict:
+    """Holdout alarm rates for synthetic frequency drops on the pre-registered modes.
+
+    For each arm and each scenario (one mode, or all modes together) the
+    smallest tested drop that alarms on at least ``DETECTED_SHARE`` of the
+    holdout days is reported as its detectable shift.
+    """
+    baseline = run_study(data)
+    modes = baseline["modes"]
+    scenarios = {f"mode {mode}": [mode] for mode in modes}
+    scenarios["all modes"] = list(modes)
+    rates: dict[str, dict[str, dict[str, float]]] = {}
+    for label, columns in scenarios.items():
+        for shift in shifts:
+            result = run_study(inject_shift(data, columns, shift), modes=modes)
+            for arm, summary in result["arms"].items():
+                rates.setdefault(arm, {}).setdefault(label, {})[f"{shift:+.4f}"] = summary["holdout"]["alarm_rate"]
+    detectable = {
+        arm: {
+            label: next(
+                (abs(shift) for shift in sorted(shifts, key=abs) if by_shift[f"{shift:+.4f}"] >= DETECTED_SHARE),
+                None,
+            )
+            for label, by_shift in by_scenario.items()
+        }
+        for arm, by_scenario in rates.items()
+    }
+    return {
+        "modes": modes,
+        "false_alarm_rate": {arm: summary["holdout"]["alarm_rate"] for arm, summary in baseline["arms"].items()},
+        "holdout_alarm_rate": rates,
+        "detectable_shift": detectable,
+    }
+
+
+def sensitivity_table(sensitivity: dict) -> str:
+    labels = [f"mode {mode}" for mode in sensitivity["modes"]] + ["all modes"]
+    lines = [
+        "| Arm | Healthy holdout alarms | " + " | ".join(labels) + " |",
+        "| --- | --- | " + " | ".join("---" for _ in labels) + " |",
+    ]
+    for arm, by_scenario in sensitivity["detectable_shift"].items():
+        cells = [f"{100 * by_scenario[label]:.2g}%" if by_scenario[label] else "> 2%" for label in labels]
+        rate = sensitivity["false_alarm_rate"][arm]
+        lines.append(f"| {arm} | {100 * rate:.0f}% | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
 
 
 def main(argv=None) -> int:
@@ -130,6 +209,10 @@ def main(argv=None) -> int:
         nargs="+",
         help="0-based mode indices to monitor instead of the reference-only selection",
     )
+    parser.add_argument("--environment", action="store_true", help="add the weather-station arm")
+    parser.add_argument(
+        "--sensitivity", action="store_true", help="inject synthetic drops into the holdout (about 3 minutes)"
+    )
     args = parser.parse_args(argv)
 
     mat_path = args.data_dir / "trackedmodes.mat"
@@ -139,7 +222,15 @@ def main(argv=None) -> int:
         print(f"{mat_path} not found; rerun with --download", file=sys.stderr)
         return 2
 
-    result = run_study(load_tracked_modes(mat_path), modes=args.modes)
+    data = load_tracked_modes(mat_path)
+    if args.sensitivity:
+        sensitivity = sensitivity_study(data)
+        print(sensitivity_table(sensitivity))
+        if args.json_out:
+            args.json_out.parent.mkdir(parents=True, exist_ok=True)
+            args.json_out.write_text(json.dumps(sensitivity, indent=2), encoding="utf-8")
+        return 0
+    result = run_study(data, modes=args.modes, environment=args.environment)
     print(markdown_table(result, changed_label="Post-retrofit"))
     summary_keys = ("modes", "baseline_source", "complete_hours", "deck_temperature_range_c", "frequency_ratio")
     print(json.dumps({key: result[key] for key in summary_keys}, indent=2))
