@@ -57,6 +57,10 @@ particular forbid passing the data to third parties.
 4. **Evaluation.** False alarms are counted on a later healthy holdout and
    detections after the known change, with the delay to the first alarm.
 
+Steps 2 to 4 live in `cauren_physics/novelty.py`, so every bridge is
+scored by the same code; a study only supplies its data and segment
+dates.
+
 A shear-building reference model (`cauren_physics/fe_reference_model.py`)
 compares measured modes with model frequencies as a separate
 model-consistency check. Model frequencies never replace a measured
@@ -88,7 +92,7 @@ Details are in the [KW51 case study](docs/kw51-case-study.md).
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 34 tests with pytest only (45 total with numpy, scipy and timoshenko-engine)
+python3 -m pytest tests/            # 34 tests with pytest only (47 total with numpy, scipy and timoshenko-engine)
 
 pip install -e '.[study]'           # numpy and scipy for the case studies
 python3 tools/kw51_study.py --download
@@ -118,7 +122,7 @@ python3 tools/run_oma_identification.py \
 
 | Path | What it is |
 |---|---|
-| `cauren_physics/` | Modal identification, baseline pairing, FE reference model, optional Timoshenko adapter |
+| `cauren_physics/` | Modal identification, baseline pairing, FE reference model, optional Timoshenko adapter, and the shared normalization and novelty-detection protocol (`novelty.py`) |
 | `tools/` | Bridge studies and the OMA command line tool |
 | `docs/` | One page per study: data, protocol, results, limitations |
 | `tests/` | Synthetic tests with known answers; no download needed |
