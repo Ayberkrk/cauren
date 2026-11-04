@@ -6,14 +6,10 @@
 
 - [ ] `python3 -m pytest tests/` passes locally
 - [ ] Added or updated a test covering this change
-- [ ] If this touches the civil feature list, all four places are
-      updated (`cauren_agents/civil/agent.py`,
-      `tools/build_cauren_civil_dataset.py`,
-      `tools/audit_cauren_data_quality.py`,
-      `data/public_sources/README.md`)
-- [ ] If this touches the pipeline or the core runtime, no per-request
-      state was added to anything shared across requests (see
-      CONTRIBUTING.md and `tests/test_pipeline_concurrency.py`)
+- [ ] If this changes a study's protocol or results, the matching page in
+      `docs/` is updated with the new numbers and how to reproduce them
+- [ ] No monitoring data is committed (KW51, Z24 and HBTA stay under the
+      gitignored `data/` folders)
 
 ## Notes for the reviewer
 

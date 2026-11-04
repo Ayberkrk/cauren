@@ -2,434 +2,135 @@
 
 [![Tests](https://github.com/Ayberkrk/cauren/actions/workflows/tests.yml/badge.svg)](https://github.com/Ayberkrk/cauren/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![good first issues](https://img.shields.io/github/issues/Ayberkrk/cauren/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/Ayberkrk/cauren/labels/good%20first%20issue)
 
-Cauren is a civil-engineering diagnostics and decision-support system.
-It ingests sensor/CBS ("bina/insaat" GIS) readings or bridge inspection
-records, normalizes them into a canonical feature schema, and runs a
-generic anomaly-detection core alongside a domain evidence layer. Current
-physics heuristics are diagnostic-only: none contributes to active risk
-until its validation is documented and explicitly enabled. Diagnoses are
-**non-authoritative** decision support.
+Cauren is a research study on **vibration-based damage detection for
+bridges**. It identifies natural frequencies from monitoring data,
+removes the part of their variation explained by the environment, and
+tests novelty detectors for how early they flag a structural change and
+how often they raise false alarms on a healthy structure.
 
-Cauren does not issue final engineering decisions or automated
-enforcement. Diagnoses are meant for field inspection, permit review,
-and risk prioritization, never as an automated final engineering or
-enforcement decision.
+It is not a product or a service. Every result here comes from public
+monitoring data, under one written protocol, with the code to reproduce it.
 
-```
-raw sensor/CBS/inspection payload
-        |
-        v
-  normalization  ->  agent router  ->  sector agent  ->  explainable diagnosis
-                                            |
-                                statistical anomaly core
-                                            +
-                                  domain physics layer
-```
+## Research question
 
-## Two sector agents
+> When temperature and other environmental effects move a bridge's natural
+> frequencies by as much as damage does, which normalization and novelty
+> detection methods detect the damage earliest, with the fewest false
+> alarms on healthy data?
 
-| | `cauren-civil` | `cauren-bridge` |
-|---|---|---|
-| Domain | Buildings / construction | Bridges |
-| Required features | 8 | 3 |
-| Live API today | Yes (default) | Registered, not exposed by default |
-| Trained model | No (statistical fallback only) | Yes, see [Evaluation](#evaluation) |
-| Ground truth used | Narrow NYC CO administrative outcome in research only; no building-safety label | Real 5-year deterioration outcome (FHWA) |
+Natural frequencies fall when a structure loses stiffness, which makes
+them a standard damage indicator. But they also change with temperature:
+steel softens as it warms, and frozen asphalt, ballast or bearings can
+stiffen a deck by several percent in winter. A detector that ignores this
+either misses small damage or alarms every cold snap.
 
-`cauren-bridge` has a real, public, per-asset deterioration outcome from FHWA
-inspection history. The NYC research cohort adds an administrative CO outcome
-for new-building permits; it does not establish structural condition or safety
-and does not train the broader eight-feature building model.
+## Datasets
 
-### `cauren-civil` feature schema (8 required)
+| Bridge | What is known | Access | Status |
+|---|---|---|---|
+| **KW51**, steel railway bowstring, Leuven (Maes and Lombaert) | 15 months of hourly modal frequencies and temperatures; diagonal connections strengthened in 2019 | Open, Zenodo [3745914](https://doi.org/10.5281/zenodo.3745914), CC BY-NC-SA 4.0 | Done, see [case study](docs/kw51-case-study.md) |
+| **Hell Bridge Test Arena**, full-scale steel truss (Norway) | Undamaged reference and known imposed damage states, shaker excitation, 100 Hz | Open, Zenodo [14028239](https://zenodo.org/records/14028239), CC BY 4.0 | Planned |
+| **Z24**, post-tensioned concrete box girder (Switzerland) | One year of monitoring with air and soil temperatures, then progressive damage tests before demolition | On request from [KU Leuven](https://bwk.kuleuven.be/bwm/z24), non-commercial research | Access requested |
 
-| Feature | Unit | What it represents |
-|---|---|---|
-| `structural_risk_score` | ratio (0-1) | Structural condition / risk level |
-| `inspection_finding_score` | ratio (0-1) | Severity of open field-inspection findings |
-| `permit_status_score` | ratio (0-1) | Permit/approval completeness |
-| `construction_progress_pct` | % (0-100) | Construction completion level |
-| `infrastructure_connection_score` | ratio (0-1) | Utility/infrastructure connection readiness |
-| `natural_hazard_score` | ratio (0-1) | Seismic/flood/other natural hazard exposure |
-| `occupancy_safety_score` | ratio (0-1) | Life-safety / occupancy risk |
-| `ground_stability_score` | ratio (0-1) | Geotechnical/foundation stability |
+No monitoring data is committed to this repository. Each study downloads
+or reads its data into a gitignored folder under `data/`. Z24's terms in
+particular forbid passing the data to third parties.
 
-Optional: `building_height_m`, `footprint_area_m2`, `soil_settlement_mm`,
-`utility_disruption_score`.
+## Method
 
-### `cauren-bridge` feature schema (3 required)
+1. **Modal identification.** `cauren_physics/oma.py` identifies natural
+   frequencies from one vibration channel by peak picking on a Welch
+   spectrum, with half-power damping reported only when the bandwidth is
+   resolved. With several aligned channels and Timoshenko 2.x installed,
+   Frequency Domain Decomposition adds mode shapes. Identified modes are
+   paired with a baseline one to one, and differences inside one frequency
+   bin are not counted as drift. See
+   [OMA and Timoshenko integration](docs/oma-timoshenko-integration.md).
+2. **Environmental normalization.** Each mode's frequency is regressed on
+   temperature (bilinear, so the slope can change below freezing), and
+   detection runs on the residuals.
+3. **Novelty detection.** Detectors are fitted on a reference period only:
+   raw-frequency Mahalanobis distance, temperature-normalized residual
+   Mahalanobis distance, and a PCA residual. The control limit is the 99th
+   percentile of the reference daily scores.
+4. **Evaluation.** False alarms are counted on a later healthy holdout and
+   detections after the known change, with the delay to the first alarm.
 
-| Feature | Unit | Source |
-|---|---|---|
-| `structural_risk_score` | ratio (0-1) | Derived from FHWA deck/superstructure/substructure condition ratings |
-| `ground_stability_score` | ratio (0-1) | Scour risk/vulnerability derived from FHWA Item 113 (scour-criticality rating) via an explicit code -> risk mapping (categorical, not linear); 1.0 = poor stability / high vulnerability, same risk direction as `cauren-civil`'s `ground_stability_score` |
-| `natural_hazard_score` | ratio (0-1) | USGS seismic hazard (PGA) + FEMA flood zone |
+A shear-building reference model (`cauren_physics/fe_reference_model.py`)
+compares measured modes with model frequencies as a separate
+model-consistency check. Model frequencies never replace a measured
+baseline.
 
-## Evaluation
+## Results so far
 
-`cauren-bridge`'s backbone (a masked-autoencoder encoder, a sequential
-1-D convolution branch, and an RNN-Twin temporal-consistency branch,
-plus a small classification head) is trained and evaluated on a real
-dataset built from public sources, not synthetic or heuristic data.
+**KW51.** All three detectors had 0 of 44 false-alarm days in the spring
+2019 holdout and alarmed on every post-retrofit day from the first one.
+The retrofit moved two modes by about 2%, which makes this an easy case.
+In a post-hoc rerun on the three least-shifted modes, temperature
+normalization widened the detection margin (lowest post-retrofit score
+1.82 times the limit, against 1.27 raw), while the PCA residual alarmed
+on 23% of the warmer holdout days. Fitted temperature slopes are negative
+for every mode, and the uneven, mixed-sign shifts are consistent with a
+local change. This is one bridge and one intervention, not a validation.
+Details are in the [KW51 case study](docs/kw51-case-study.md).
 
-| | |
-|---|---|
-| Source | FHWA National Bridge Inventory (2000-2023) + USGS seismic hazard + FEMA flood zone |
-| States covered | California, Iowa, Pennsylvania |
-| Bridges | 56,679, each with a real, independently-observed 5-year outcome |
-| Supervised target | `deck_drop_5yr`: did the deck condition rating actually drop within 5 years? |
-| Train / validation / test | 39,675 / 8,501 / 8,503 windows, split by bridge (no bridge appears in two splits) |
-| Validation accuracy | **77.3%** (epoch 9, selected by validation supervised BCE -- see note) |
-| Validation majority-class baseline | 74.1% |
-| Test accuracy | **77.3%** (untouched test split, never used for training or checkpoint selection) |
-| Test majority-class baseline | 74.0% |
-| Test precision / recall / F1 | 74.6% / **19.2%** / 30.5% (prediction threshold 0.5) |
-| Test balanced accuracy | **58.4%** |
-| Test confusion matrix | TP 423, FP 144, TN 6151, FN 1785 |
-| Parameters | 176,196 |
+## Limitations
 
-77.3% against a ~74% baseline is a modest, genuine improvement, not a
-spectacular one, and that is the point: the input window for each
-prediction is strictly limited to years at or before the outcome's
-reference year, so the model cannot see the future it is predicting. A
-model claiming much higher accuracy on this kind of task without a
-similar leakage check should be treated with suspicion. Validation and
-test accuracy landing within a hundredth of a point of each other is a
-good sign that the checkpoint wasn't overfit to whichever split selected
-it. See `data/cauren_bridge/dataset_summary.json` (built locally,
-gitignored because of size, see
-[Rebuilding the bridge dataset](#rebuilding-the-bridge-dataset)) and
-`cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt` for the
-trained artifact; `tools/evaluate_cauren_bridge_checkpoint.py` reproduces
-the test-split numbers above from that checkpoint.
+- Only one bridge has been analysed so far, and its change was a
+  strengthening that raised some frequencies. Damage usually lowers them.
+- Temperature is the only environmental covariate used. Humidity, traffic
+  and the uncertainty of each identified frequency are not modelled.
+- Short holdouts leave wide uncertainty on false-alarm rates: 0 of 44 days
+  still allows a true daily rate up to about 7%.
 
-**Accuracy alone overstates this model.** `deck_drop_5yr` is imbalanced
-(~25% positive: most bridges don't deteriorate within 5 years), so a
-model that always predicts "no drop" already scores ~74-75% accuracy
-without ever finding a real deterioration case. The 77.3% headline
-number is only 3 points above that trivial baseline, and the confusion
-matrix above shows why: at the 0.5 prediction threshold, the model finds
-423 of the 2,208 real positive cases in the test split and misses 1,785
-of them (19.2% recall), while balanced accuracy (58.4%, the average of
-recall and specificity) is much closer to the 50% chance line than the
-77.3% raw-accuracy figure suggests. Precision (74.6%) is respectable when
-the model does flag a bridge, but it flags relatively few. This is a
-real limitation of the current checkpoint, not a reporting error, and
-it's why `tools/evaluate_cauren_bridge_checkpoint.py` reports precision,
-recall, F1, balanced accuracy, and the raw confusion matrix alongside
-accuracy rather than accuracy alone.
-
-**Checkpoint selection.** For a dataset without a real supervised target
-(`cauren-civil`), the best checkpoint is the epoch with the lowest
-validation reconstruction (MAE) loss. For `cauren-bridge`, which has one
-(`deck_drop_5yr`), the best checkpoint is instead the epoch with the
-lowest validation supervised loss (binary cross-entropy on
-`deck_drop_5yr`), not reconstruction loss -- the two can diverge (an
-epoch can reconstruct the input window better while forecasting the
-outcome worse), and the model is explicitly evaluated on the forecasting
-task. BCE is used over raw accuracy for selection because the target is
-imbalanced (~25% positive); reconstruction loss is still recorded every
-epoch for diagnostics (`cauren_core/training.py`'s
-`train_summary["validation_loss_history"]`), and the selected metric and
-its value/epoch are recorded in `train_summary["selection_metric"]` /
-`train_summary["best_selection_metric_value"]`. The figures above were
-measured after both this rule and the Item 113 scour-direction fix (see
-`ground_stability_score` above) landed, by rebuilding the dataset from
-the original FHWA/USGS/FEMA sources and retraining from scratch:
+## Reproduce
 
 ```bash
-python3 tools/train_cauren_core.py \
-    --dataset-dir data/cauren_bridge --agents cauren-bridge \
-    --output-path cauren_core/checkpoints/cauren_bridge_backbone_bundle.pt \
-    --epochs 20 --batch-size 64 --learning-rate 0.0004 \
-    --early-stopping-patience 5 --min-epochs 5
-python3 tools/evaluate_cauren_bridge_checkpoint.py
+pip install -e '.[test]'
+python3 -m pytest tests/            # 34 tests with pytest only (45 total with numpy, scipy and timoshenko-engine)
+
+pip install -e '.[study]'           # numpy and scipy for the case studies
+python3 tools/kw51_study.py --download
+python3 tools/kw51_study.py
 ```
 
-(the retraining accuracy landed within 0.02 points of the pre-fix number
-measured under the old reconstruction-loss selection rule and the old,
-direction-inverted scour feature -- on this dataset the two fixes turned
-out not to move the headline accuracy much, which is itself a useful,
-honestly-reported data point, not a reason to have skipped verifying it).
-
-## Status and honest limitations
-
-This project is a working research prototype, not a finished product.
-
-- **`cauren-civil` has no pretrained model yet.**
-  `cauren_core/checkpoints/` ships without one for it. Out of the box,
-  the anomaly-detection core runs on its statistical fallback, not a
-  trained neural backbone.
-- **The statistical core needs a per-asset reference to raise an alarm.**
-  With a `baseline` (in the request or stored with
-  `POST /baseline/{asset_id}`), each feature is tested against the asset's
-  own center and scale for spikes, steps, drift, level offset, and
-  flatline, and all tests of a diagnosis are Holm-corrected at a 5%
-  family-wise rate; the 0.34 threshold corresponds to that rate. Without a
-  reference the window can only be compared with itself, so the core
-  reports `insufficient_validated_evidence` with risk 0 instead of
-  alarming. The tests assume independent noise around the reference;
-  autocorrelated or seasonal records will alarm more often than 5%.
-- **A single-snapshot request has no time series to analyze.** If you
-  send one reading per feature with no history, the core reports
-  `insufficient_temporal_history` / `snapshot_only` instead of a
-  fabricated pattern verdict. Current physics relations remain visible
-  as unvalidated diagnostic evidence but are suppressed from the active
-  risk contribution; the statistical core is also a research signal, not
-  an engineering judgment. Send a real time series (`seq_len` distinct
-  timestamps) for pattern-shape detection (drift, spike, oscillation,
-  flatline, and so on).
-- **`LLM/` (`rocket_llm`) is pre-alpha.** Its only CLI,
-  `rocket-llm-prepare-sft`, converts structured and engineer-reviewed
-  records into SFT JSONL; it does not run a model or train weights. The
-  job stays disabled in the default config until an operator enables it.
-- **`cauren-civil` does not derive its 8 scores from raw sensor/CBS
-  data, it consumes them.** The required features are expected to
-  already exist (from a field inspection, an engineering assessment,
-  another model) before they reach Cauren. This was validated end to
-  end against a real public dataset (US Census building-permit records
-  via Hugging Face, `thanna94/us-building-permits`): it cleanly
-  produced two of the eight, `permit_status_score` and
-  `construction_progress_pct`, but the other six have no off-the-shelf
-  public source, and the pipeline correctly reported them as
-  `missing_features` instead of inventing values. What Cauren adds on
-  top of scores you already have is anomaly-pattern detection over
-  time, physics-relation reasoning between scores, and an explainable
-  diagnosis, not score generation from raw measurements.
-
-### Bridge model comparison
-
-`tools/benchmark_cauren_bridge_models.py` compares the bridge models on the
-same bridge-disjoint splits using PR-AUC, Brier score, calibration error, and
-recall and false alarms when reviewing the highest-risk 5% or 10% of bridges.
-On the local v3 split, the saved hybrid scored PR-AUC 0.532, Brier 0.1640,
-and ECE 0.0119. Same-input histogram boosting scored PR-AUC 0.5506 and Brier
-0.1609. A paired bridge-cluster bootstrap puts the hybrid-minus-booster
-PR-AUC difference at -0.0184 (95% interval -0.0263 to -0.0096) and Brier
-difference at +0.00315 (0.00186 to 0.00433), favoring boosting on this split;
-the hybrid has lower ECE. Strict leave-one-state-out refits showed uneven
-transfer, so no new probability is exposed through the API. Protocol, state
-results, uncertainty intervals, and reproduction steps are in
-[docs/bridge-model-benchmark.md](docs/bridge-model-benchmark.md).
-
-### Bridge model v4
-
-The v4 panel keeps every bridge-year with traffic, structure type, deck
-protection, reconstruction and inspection-timing items from the NBI. On the
-same 8,503 test bridges, a v4 booster reaches PR-AUC 0.706 against 0.646 for
-the same booster on v3-equivalent inputs (paired difference +0.060, interval
-+0.049 to +0.070). Trained only on outcomes known by 2018 and scored on the
-2018 anchors, the gain holds (0.553 against 0.486, +0.067), and that
-out-of-time figure is the honest estimate of field performance. v4 does not
-transfer better to an unseen state (California 0.462 against 0.613), and a
-discrete-time hazard formulation added nothing over the v3 booster. Full
-tables, calibration and conformal results are in
-[docs/bridge-model-v4.md](docs/bridge-model-v4.md).
-
-### KW51 bridge modal monitoring case study
-
-`tools/kw51_study.py` tests modal novelty detection on the KW51 steel railway
-bridge (Maes and Lombaert, Zenodo 3745914, CC BY-NC-SA 4.0; downloaded on
-demand, not committed), whose diagonal connections were strengthened in 2019.
-Detectors are fitted on October 2018 to March 2019. Raw-frequency
-Mahalanobis, temperature-normalized residual Mahalanobis, and PCA residual
-detectors all had 0 of 44 false-alarm days in the spring 2019 holdout and
-alarmed on all post-retrofit days from the first one. The retrofit moved two
-modes by about 2%, which makes this an easy case; a post-hoc subset of the
-three least-shifted modes shows temperature normalization widening the
-detection margin and PCA failing the false-alarm target. Fitted temperature
-slopes are negative for every mode, and the uneven, mixed-sign shifts are
-consistent with a local change. This is a single-bridge case study, not a
-validation. Details are in [docs/kw51-case-study.md](docs/kw51-case-study.md).
-
-### Statistical core benchmark
-
-`tools/benchmark_core_anomaly.py` runs the full diagnosis pipeline on seeded
-synthetic civil windows (clean noise, stuck and naturally constant features,
-drifts, steps, and spikes measured in reference-scale units) and reports
-alarm rates with Wilson 95% intervals. With a reference, the core alarms
-on 1.4% of clean windows, 99.4% of 3 sigma drifts, 100% of 3 sigma steps,
-92.6% of 6 sigma spikes, and 100% of stuck features that should vary, but
-not on features that are constant by nature (2.2%, the clean rate of the
-other seven). The window-normalized core it replaced alarmed on 1.0% to
-5.8% of every one of those single-feature scenarios regardless of
-magnitude. Protocol and results are in
-[docs/core-anomaly-benchmark.md](docs/core-anomaly-benchmark.md).
-
-### NYC DOB research dataset
-
-The new-building permit cohort links BIS and DOB NOW permits to both
-certificate feeds, with violation and complaint records restricted to the
-cohort's BINs. The 2026-09-29 snapshot contains 94,910 buildings. In a
-five-year horizon, 14,612 have a qualifying non-temporary CO record and 73,336
-have mature follow-up without one; 6,962 remain censored or ambiguous. This is
-an administrative outcome, not a safety label. The 57-record linkage review,
-historical DOB field versions, and FEMA map vintage checks remain open, so the
-dataset is not ready for model training. See the [NYC dataset method and audit](docs/nyc-civil-dataset.md)
-and the [combined research plan](docs/bridge-and-nyc-research-plan.md).
-
-## What ships with every diagnosis
-
-Beyond the risk score itself, each diagnosis carries the checks that were
-run on the way to it, so a reviewer can see how much to trust it:
-
-| Output key | What it answers |
-|---|---|
-| `quality_control` | Were the inputs usable? Required-feature completeness, unit-range sanity, flatline/stuck sensors, how many sensor names failed to normalize, how many raw readings were rejected. |
-| `uncertainty_report` | How much should the score be trusted? A confidence band around the risk score derived from data quality, the core's own confidence, and how much of the physics schema had evidence. |
-| `risk_score_status` | Whether the numeric score is based on validated physics rules, a statistical research signal, or insufficient evidence. A numeric zero with `insufficient_validated_evidence` must not be read as low risk. |
-| `physics_evidence` | Which domain relations were observed, which required features were missing, and whether a relation is validated and enabled to affect risk. Current heuristic relations are diagnostic-only. |
-
-Structural-health inputs are optional and separate. `cauren_physics/oma.py`
-identifies natural frequencies from one vibration channel and estimates
-damping from a Welch spectrum. Damping is reported only when the measured
-half-power bandwidth is resolved. With multiple aligned channels, optional
-Timoshenko 2.x support adds Frequency Domain Decomposition (FDD) mode shapes.
-`cauren_physics/fe_reference_model.py` compares measured modes with a
-shear-building model and reports a separate model-consistency ratio. FE
-frequencies do not replace a measured drift baseline. Measured baseline
-drift is a decision-support signal for human review, not a damage verdict.
-
-Cauren can use Timoshenko for shared structural calculations: single-channel
-modal identification, mode pairing, multi-channel FDD, shear-building
-frequencies, and the global stiffness update summary. Cauren-specific risk
-relations and model interpretation remain in Cauren. Timoshenko is optional;
-the Cauren package and single-channel fallback work without it. Install
-[Timoshenko Engine](https://github.com/Ayberkrk/timoshenko) into the same
-Python environment to enable the shared engine path:
+Single-channel identification, optionally with a baseline and an FE
+model-consistency check:
 
 ```bash
-python -m pip install timoshenko-engine
-```
-
-The distribution name is `timoshenko-engine`, while the import name is
-`timoshenko`.
-
-```bash
-# Full explainable review over real data (repo ships a small public dataset)
-python3 tools/run_explainable_review.py \
-  --wide-csv data/public_sources/normalized/civil_public_core_assets.csv
-
-# ...or from a raw sensor feed, with a modal-drift check folded in
-python3 tools/run_explainable_review.py \
-  --sensors-json my_sensors.json \
-  --vibration-csv my_vibration.csv --sampling-hz 100 \
-  --baseline-frequencies-hz 2.01
-
-# Multi-channel FDD uses columns in channel-major order and requires Timoshenko 2.0+
-python3 tools/run_oma_identification.py \
-  --input-csv my_channels.csv --columns north east west --sampling-hz 100
-
-# FE consistency is reported separately from the measured drift baseline
 python3 tools/run_oma_identification.py \
   --input-csv my_vibration.csv --column acceleration --sampling-hz 100 \
   --baseline-frequencies-hz 2.01 \
   --fe-story-masses-kg 50000 --fe-story-stiffness-n-per-m 8000000
 ```
 
-These are decision-support signals for routing an asset to a human
-reviewer, not damage verdicts.
+Multi-channel FDD needs [Timoshenko Engine](https://github.com/Ayberkrk/timoshenko)
+2.0 or newer in the same environment (`pip install timoshenko-engine`;
+the import name is `timoshenko`):
+
+```bash
+python3 tools/run_oma_identification.py \
+  --input-csv my_channels.csv --columns north east west --sampling-hz 100
+```
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
-| `cauren_core/` | Sector-agnostic runtime: contracts, orchestrator, statistical anomaly core, the trainable backbone, normalization |
-| `cauren_agents/` | Sector agents (`civil`, `bridge`) and the router |
-| `cauren_physics/` | Domain physics/reasoning layer, one module per sector |
-| `api/` | FastAPI service exposing the pipeline over HTTP |
-| `tools/` | Dataset build and training scripts |
-| `data/` | Dataset manifests, sources, and (locally built) training data |
-| `tests/` | Test suite (188 tests with minimal dependencies; 242 total with optional dependencies) |
-| `operations/` | Architecture and data-contract reference docs |
-| `LLM/` | Pre-alpha advisory-LLM sub-project; SFT data-preparation CLI available, model generation and training not implemented |
+| `cauren_physics/` | Modal identification, baseline pairing, FE reference model, optional Timoshenko adapter |
+| `tools/` | Bridge studies and the OMA command line tool |
+| `docs/` | One page per study: data, protocol, results, limitations |
+| `tests/` | Synthetic tests with known answers; no download needed |
 
-## API endpoints
+## Earlier work
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/health/liveness`, `/health/readiness` | Health checks |
-| `GET` | `/agents` | List registered sector agents |
-| `GET` | `/history/{asset_id}` | Retrieve recent local diagnosis/calibration responses for one asset |
-| `POST`, `GET` | `/baseline/{asset_id}` | Fit (median, MAD x 1.4826) and store, or read, an asset's per-feature reference; only summary statistics are stored |
-| `POST` | `/calibrate` | Normalize/calibrate a sensor payload without running physics |
-| `POST` | `/diagnose` | Full pipeline: route, calibrate, classify, physics, compose. Accepts either a `sensors` list or a CBS-shaped building record (`building_id` + `risk_assessments`/`project_permit`/etc, converted internally) |
-
-The API is for one local operator, not multiple tenants. Successful
-diagnosis and calibration responses are stored in local SQLite history
-with 90-day default retention; raw request bodies are not stored. Set
-`CAUREN_API_KEY` to require Bearer authentication on non-health routes.
-Request bodies are capped at 1 MiB and sensor lists at 8,192 rows. Stored
-responses can contain asset feature values and risk results; protect the
-database file. See [API history and access controls](docs/api-history-and-access.md).
-
-## Run the API with Docker
-
-For a local trial, Docker Compose builds the API image and binds it to
-127.0.0.1 so it is not published on your network by default:
-
-```bash
-docker compose up --build
-```
-
-When the service is ready, open http://127.0.0.1:8000/docs or check
-http://127.0.0.1:8000/health/readiness. Stop it with:
-
-```bash
-docker compose down
-```
-
-Compose stores history in a named volume and binds the service to localhost.
-Set `CAUREN_API_KEY` in the environment to protect API routes. The service
-does not provide tenant isolation or encrypted/replicated storage.
-
-## Quick start
-
-The project is pip-installable from the repo root (`pyproject.toml`
-declares `cauren_core`, `cauren_agents`, `cauren_physics`, `api`, and
-`tools` as packages, with no required dependencies of its own):
-
-```bash
-pip install -e '.[test]'
-python3 -m pytest tests/            # 188 tests, no network/GPU/numpy/torch required (242 total with optional dependencies)
-
-pip install -e '.[api]'             # only needed to actually run the API
-python3 api/app.py                  # or: uvicorn api.app:app --reload
-```
-
-Installing individual packages directly still works if you'd rather not
-use the extras above:
-
-```bash
-pip install fastapi pydantic pytest httpx
-pip install uvicorn                 # only needed to actually run the API
-```
-
-`numpy` is optional: `cauren_physics/oma.py` uses it for faster FFTs when
-present, and falls back to a pure-Python DFT otherwise. Nothing else in
-the pipeline touches it. Building/training against the bridge dataset
-needs the `dataset` extra (`pip install -e '.[dataset]'`, i.e.
-`numpy`/`pandas`/`scipy`), and training the core backbone needs the
-`backbone` extra (`torch`) -- see the next section.
-
-### Rebuilding the bridge dataset
-
-`data/cauren_bridge/` is not checked in (it is ~1.5GB and fully
-reproducible from public sources). To rebuild it you need `pandas` and
-`scipy` in addition to the packages above (`pip install -e '.[dataset]'`),
-and to pull the source data yourself:
-
-- FHWA National Bridge Inventory: `sweetapricity/bridgedeck-nbi` on
-  Hugging Face
-- USGS seismic hazard: `sweetapricity/bridgedeck-nshm`
-- FEMA flood zone: `sweetapricity/bridgedeck-nfhl`
-
-See `data/cauren_bridge/dataset_summary.json`'s `source` field and
-`cauren_physics/bridge.py`'s module docstring for the feature
-derivations, and `tools/train_cauren_core.py` for the training
-entry point once the dataset exists locally.
+Before this study, Cauren was a decision-support prototype: an HTTP API,
+a civil building risk agent, a bridge deterioration model trained on the
+FHWA National Bridge Inventory, and an NYC building permit cohort. That
+work is preserved at the
+[`decision-support-prototype`](https://github.com/Ayberkrk/cauren/tree/decision-support-prototype)
+tag.
 
 ## Contributing
 
@@ -437,4 +138,4 @@ See `CONTRIBUTING.md`.
 
 ## License
 
-Apache 2.0. See `LICENSE`.
+Apache 2.0. See `LICENSE`. Datasets keep their own licenses.

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import sys
 from pathlib import Path
+from typing import Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -12,7 +15,52 @@ if str(PROJECT_ROOT) not in sys.path:
 from cauren_physics.fe_reference_model import ShearBuildingModel, model_consistency
 from cauren_physics.oma import compare_to_baseline, identify_modal_parameters
 from cauren_physics.timoshenko_adapter import identify_multichannel
-from tools.run_explainable_review import load_vibration_columns, load_vibration_series
+
+
+def load_vibration_columns(path: Path, columns: Sequence[str]) -> list[list[float]]:
+    """Load selected vibration columns in the requested channel-major order."""
+    requested = list(columns)
+    if not requested:
+        raise SystemExit(f"{path}: at least one vibration column is required.")
+    if len(set(requested)) != len(requested):
+        raise SystemExit(f"{path}: vibration columns must be unique.")
+    values = [[] for _ in requested]
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration:
+            header = []
+        missing = [column for column in requested if column not in header]
+        if missing:
+            raise SystemExit(f"{path}: column(s) {missing!r} not found. Available columns: {header}")
+        indices = [header.index(column) for column in requested]
+        for row in reader:
+            if not row:
+                raise SystemExit(f"{path}:{reader.line_num}: empty vibration sample row.")
+            for output_index, (column, source_index) in enumerate(zip(requested, indices)):
+                raw = row[source_index].strip() if source_index < len(row) else ""
+                if not raw:
+                    raise SystemExit(f"{path}:{reader.line_num}: column '{column}' has an empty sample.")
+                try:
+                    value = float(raw)
+                except ValueError:
+                    raise SystemExit(
+                        f"{path}:{reader.line_num}: column '{column}' has non-numeric value {raw!r}. "
+                        "A vibration series must be numeric throughout."
+                    ) from None
+                if not math.isfinite(value):
+                    raise SystemExit(
+                        f"{path}:{reader.line_num}: column '{column}' has non-finite value {raw!r}."
+                    )
+                values[output_index].append(value)
+    if not values[0]:
+        raise SystemExit(f"{path}: column(s) {requested!r} contained no numeric samples.")
+    return values
+
+
+def load_vibration_series(path: Path, column: str) -> list[float]:
+    return load_vibration_columns(path, [column])[0]
 
 
 def main() -> None:
