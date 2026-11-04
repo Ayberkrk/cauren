@@ -21,10 +21,13 @@ dependencies = []
 test = [
   "pytest>=7",
 ]
-# Bridge case studies (tools/kw51_study.py) and faster OMA spectra.
+# Bridge case studies (tools/kw51_study.py, tools/hbta_study.py) and faster OMA spectra.
 study = [
   "numpy>=1.24",
   "scipy>=1.10",
+  "h5py>=3.8",
+  "fsspec>=2023.1",
+  "aiohttp>=3.8",
 ]
 # Repository lint checks (kept out of the runtime and test extras).
 lint = [

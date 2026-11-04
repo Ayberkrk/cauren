@@ -4,19 +4,23 @@ Every bridge study scores its identified natural frequencies with the same
 code so the results are comparable across structures:
 
 1. Monitored modes are chosen from the reference period only.
-2. A per-mode linear temperature model, fitted on the reference period,
-   removes the environmental part of the frequency variation.
-3. Three detectors are fitted on the reference period: Mahalanobis distance
-   of the raw frequencies, Mahalanobis distance of the temperature residuals,
-   and the residual outside the leading principal components.
-4. Hourly scores are reduced to daily medians. Each day gets a conformal
-   p-value against the reference days, and a day alarms when p <= alpha.
-   Alarms are counted in a later healthy holdout (false alarms) and after
-   the known change (detections).
+2. A per-mode temperature model (bilinear, or a Gaussian process), fitted
+   on the reference period, removes the environmental part of the
+   frequency variation.
+3. Five arms are fitted on the reference period: Mahalanobis distance of
+   the raw frequencies and of the bilinear and Gaussian process residuals,
+   the residual outside the leading principal components, and the mean
+   distance to the nearest reference samples.
+4. Hourly scores are reduced to daily medians. Each reference day is scored
+   by a model fitted without it, each later day gets a conformal p-value
+   against those reference days, and a day alarms when p <= alpha. Alarms
+   are counted in a later healthy holdout (false alarms) and after the
+   known change (detections).
 
 A study supplies the hourly times, frequencies and temperature plus its
-segment dates; nothing here is specific to one bridge. Unlike
-``cauren_physics.oma``, this module needs numpy.
+segment dates; nothing here is specific to one bridge. ``evaluate_states``
+does the same for tests that are separate recordings rather than one
+continuous record. Unlike ``cauren_physics.oma``, this module needs numpy.
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ HINGE_TEMPERATURE_C = 0.0
 ALPHA = 0.01
 MIN_HOURS_PER_DAY = 6
 PCA_RETAINED_VARIANCE = 0.90
+KNN_NEIGHBOURS = 10
+GP_BIN_WIDTH_C = 0.5
+GP_LENGTH_SCALES_C = (1.0, 2.0, 4.0, 8.0, 16.0)
 
 Segment = tuple[dt.datetime, dt.datetime]
 
@@ -164,6 +171,98 @@ class PCAResidualDetector:
         return np.sqrt(np.sum(residual**2, axis=1))
 
 
+class KNNDetector:
+    """Mean distance to the ``k`` nearest reference samples, in reference-standardized units.
+
+    Unlike the Mahalanobis distance it assumes no single ellipse: if the
+    environment bends the healthy frequencies along a curve (for example a
+    steeper slope below freezing), samples on that curve stay close to some
+    reference samples while a structural change moves them off it.
+    """
+
+    def __init__(self, training: np.ndarray, k: int = KNN_NEIGHBOURS, chunk: int = 2048):
+        self.mean = training.mean(axis=0)
+        self.scale = training.std(axis=0)
+        self.reference = (training - self.mean) / self.scale
+        self.k = min(k, len(training))
+        self.chunk = chunk
+
+    def score(self, samples: np.ndarray) -> np.ndarray:
+        standardized = (np.asarray(samples, dtype=float) - self.mean) / self.scale
+        reference_sq = np.sum(self.reference**2, axis=1)
+        scores = np.empty(len(standardized))
+        for start in range(0, len(standardized), self.chunk):
+            block = standardized[start : start + self.chunk]
+            squared = np.sum(block**2, axis=1)[:, None] + reference_sq[None, :] - 2.0 * block @ self.reference.T
+            nearest = np.partition(np.maximum(squared, 0.0), self.k - 1, axis=1)[:, : self.k]
+            scores[start : start + self.chunk] = np.sqrt(nearest).mean(axis=1)
+        return scores
+
+
+class GaussianProcessBaseline:
+    """Per-mode Gaussian process of frequency against temperature.
+
+    A smooth, data-driven alternative to the bilinear model: the curve may
+    bend wherever the reference data says so, not only at a chosen hinge.
+    Hours are averaged in temperature bins first, with each bin mean's
+    noise set to the pooled within-bin variance over its count, which keeps
+    the fit small however long the reference is. The length scale is picked
+    per mode by marginal likelihood from a fixed grid.
+    """
+
+    def __init__(
+        self,
+        temperature_c,
+        frequencies_hz,
+        bin_width_c: float = GP_BIN_WIDTH_C,
+        length_scales_c=GP_LENGTH_SCALES_C,
+    ):
+        temperature = np.asarray(temperature_c, dtype=float)
+        frequencies = np.asarray(frequencies_hz, dtype=float)
+        bins = np.floor(temperature / bin_width_c).astype(int)
+        labels, inverse, counts = np.unique(bins, return_inverse=True, return_counts=True)
+        sums = np.zeros((len(labels), frequencies.shape[1]))
+        np.add.at(sums, inverse, frequencies)
+        means = sums / counts[:, None]
+        centres = np.zeros(len(labels))
+        np.add.at(centres, inverse, temperature)
+        self.inputs = centres / counts
+        within = np.sum((frequencies - means[inverse]) ** 2, axis=0) / max(len(temperature) - len(labels), 1)
+        self.offsets = np.average(means, axis=0, weights=counts)
+        self.length_scales = []
+        self.weights = []
+        for mode in range(frequencies.shape[1]):
+            target = means[:, mode] - self.offsets[mode]
+            noise = within[mode] / counts
+            signal = max(float(np.average(target**2, weights=counts)), float(np.min(noise)))
+            best = None
+            for length in length_scales_c:
+                covariance = signal * self._kernel(self.inputs, self.inputs, length) + np.diag(noise)
+                factor = np.linalg.cholesky(covariance)
+                solved = np.linalg.solve(factor.T, np.linalg.solve(factor, target))
+                evidence = -0.5 * target @ solved - np.sum(np.log(np.diag(factor)))
+                if best is None or evidence > best[0]:
+                    best = (evidence, length, signal * solved)
+            self.length_scales.append(float(best[1]))
+            self.weights.append(best[2])
+        self.reference_frequencies_hz = self.offsets
+
+    @staticmethod
+    def _kernel(left, right, length: float) -> np.ndarray:
+        return np.exp(-0.5 * ((left[:, None] - right[None, :]) / length) ** 2)
+
+    def predict(self, temperature_c) -> np.ndarray:
+        temperature = np.asarray(temperature_c, dtype=float)
+        columns = [
+            self.offsets[mode] + self._kernel(temperature, self.inputs, length) @ weights
+            for mode, (length, weights) in enumerate(zip(self.length_scales, self.weights))
+        ]
+        return np.column_stack(columns)
+
+    def residuals(self, temperature_c, frequencies_hz) -> np.ndarray:
+        return np.asarray(frequencies_hz, dtype=float) - self.predict(temperature_c)
+
+
 def daily_medians(times, scores, min_hours: int = MIN_HOURS_PER_DAY) -> dict[dt.date, float]:
     """Median hourly score per calendar day, skipping days with too few hours."""
     by_day: dict[dt.date, list[float]] = {}
@@ -266,6 +365,31 @@ def temperature_sensitivity_check(baseline: LinearBaseline, expected_df_over_f: 
     return rows
 
 
+def identification_uncertainty(times, residuals_hz: np.ndarray, reference_hz) -> dict:
+    """Split the normalized frequency scatter into identification noise and slow variation.
+
+    The true frequency moves little within an hour, so the difference
+    between two consecutive hourly estimates is mostly identification
+    error: its variance is twice the error variance. What remains of the
+    residual variance is environmental or operational variation the
+    temperature model did not explain.
+    """
+    residuals = np.asarray(residuals_hz, dtype=float)
+    stamps = np.array(times, dtype="datetime64[s]")
+    consecutive = np.diff(stamps) == np.timedelta64(3600, "s")
+    steps = np.diff(residuals, axis=0)[consecutive]
+    noise_var = np.mean(steps**2, axis=0) / 2.0
+    total_var = np.var(residuals, axis=0)
+    reference = np.asarray(reference_hz, dtype=float)
+    return {
+        "hourly_pairs": int(consecutive.sum()),
+        "identification_sigma_hz": [float(value) for value in np.sqrt(noise_var)],
+        "identification_sigma_relative": [float(value) for value in np.sqrt(noise_var) / reference],
+        "residual_sigma_hz": [float(value) for value in np.sqrt(total_var)],
+        "noise_share": [float(value) for value in np.minimum(noise_var / total_var, 1.0)],
+    }
+
+
 def frequency_ratio_check(reference_hz, changed_hz, relative_tolerance: float = 0.5) -> dict:
     """Is a change in normalized frequencies uniform across modes (global) or not (local)?
 
@@ -295,6 +419,121 @@ def frequency_ratio_check(reference_hz, changed_hz, relative_tolerance: float = 
     }
 
 
+DETECTORS = {
+    "raw_frequencies": MahalanobisDetector,
+    "pca_residual": PCAResidualDetector,
+    "knn": KNNDetector,
+}
+
+
+def leave_one_out_scores(detector_class, reference: np.ndarray) -> np.ndarray:
+    """Score each reference sample with a detector fitted on all the others.
+
+    Scoring the samples a detector was fitted on understates how unusual a
+    new healthy sample looks, which inflates false alarms when the
+    reference is small. Leave-one-out scores are the calibration set for
+    the conformal p-values when there are too few samples to set some aside.
+    """
+    reference = np.asarray(reference, dtype=float)
+    keep = np.ones(len(reference), dtype=bool)
+    scores = np.empty(len(reference))
+    for index in range(len(reference)):
+        keep[index] = False
+        scores[index] = detector_class(reference[keep]).score(reference[index : index + 1])[0]
+        keep[index] = True
+    return scores
+
+
+def evaluate_states(
+    reference: np.ndarray,
+    holdout: np.ndarray,
+    states: dict[str, np.ndarray],
+    *,
+    alpha: float,
+) -> dict:
+    """Score feature samples of a healthy holdout and of known structural states.
+
+    For tests that are not a continuous record: each row is one sample
+    (for example the frequencies identified in one window of a recording).
+    Detectors are fitted on all reference rows and calibrated with
+    leave-one-out reference scores; a row alarms when its conformal p-value
+    is at most ``alpha``. Raises ``ValueError`` when the reference has too
+    few rows for ``alpha``.
+    """
+    reference = np.asarray(reference, dtype=float)
+    check_alpha(len(reference), alpha)
+    arms = {}
+    for name, detector_class in DETECTORS.items():
+        detector = detector_class(reference)
+        calibration = leave_one_out_scores(detector_class, reference)
+        summaries = {}
+        for label, samples in {"holdout": holdout, **states}.items():
+            scores = detector.score(np.asarray(samples, dtype=float))
+            p_values = conformal_p_values(calibration, scores)
+            summaries[label] = {
+                "samples": int(len(scores)),
+                "alarmed": int(np.sum(p_values <= alpha + 1e-12)),
+                "alarm_rate": float(np.mean(p_values <= alpha + 1e-12)),
+                "median_p_value": float(np.median(p_values)),
+                "median_score_over_limit": float(np.median(scores) / conformal_limit(calibration, alpha)),
+            }
+        arms[name] = summaries
+        if isinstance(detector, PCAResidualDetector):
+            arms[name]["retained_components"] = detector.retained
+    return {
+        "alpha": alpha,
+        "reference_samples": int(len(reference)),
+        "p_value_floor": 1.0 / (len(reference) + 1.0),
+        "arms": arms,
+    }
+
+
+def _arm_scorers(selected: np.ndarray, temperature: np.ndarray, covariates: np.ndarray) -> dict:
+    """One function per arm: fit on the hours in ``train``, score the hours in ``rows``."""
+
+    def raw_frequencies(train, rows):
+        return MahalanobisDetector(selected[train]).score(selected[rows])
+
+    def temperature_normalized(train, rows):
+        baseline = fit_temperature_baseline(covariates[train], selected[train])
+        fitted = baseline.residuals(covariates[train], selected[train])
+        return MahalanobisDetector(fitted).score(baseline.residuals(covariates[rows], selected[rows]))
+
+    def gp_normalized(train, rows):
+        baseline = GaussianProcessBaseline(temperature[train], selected[train])
+        fitted = baseline.residuals(temperature[train], selected[train])
+        return MahalanobisDetector(fitted).score(baseline.residuals(temperature[rows], selected[rows]))
+
+    def pca_residual(train, rows):
+        return PCAResidualDetector(selected[train]).score(selected[rows])
+
+    def knn(train, rows):
+        return KNNDetector(selected[train]).score(selected[rows])
+
+    return {
+        "raw_frequencies": raw_frequencies,
+        "temperature_normalized": temperature_normalized,
+        "gp_normalized": gp_normalized,
+        "pca_residual": pca_residual,
+        "knn": knn,
+    }
+
+
+def _leave_one_day_out(scorer, times, train: np.ndarray, reference_days) -> dict[dt.date, float]:
+    """Daily median score of each reference day from a model fitted without that day.
+
+    A model scores the hours it was fitted on as more typical than a new
+    healthy day, so in-sample reference scores would set the p-values too
+    low for everything that follows.
+    """
+    dates = np.array([stamp.date() for stamp in times])
+    calibration = {}
+    for day in reference_days:
+        left_out = train & (dates == day)
+        calibration[day] = float(np.median(scorer(train & ~left_out, left_out)))
+    return calibration
+
+
 def run_protocol(
     times,
     frequencies_hz: np.ndarray,
@@ -304,37 +543,41 @@ def run_protocol(
     expected_df_over_f: float,
     modes: list[int] | None = None,
     alpha: float = ALPHA,
+    calibration: str = "leave_one_day_out",
 ) -> dict:
-    """Run all three detector arms on hourly frequencies and temperature.
+    """Run every detector arm on hourly frequencies and temperature.
 
     ``modes`` overrides the reference-only mode selection; a study that
-    does so must report the result as post hoc. Raises ``ValueError``
-    before scoring when the reference period has too few days for ``alpha``.
+    does so must report the result as post hoc. Reference days are scored
+    by a model fitted without them (``calibration="leave_one_day_out"``);
+    ``"in_sample"`` keeps the earlier behaviour for comparison. Raises
+    ``ValueError`` before scoring when the reference period has too few
+    days for ``alpha``.
     """
+    if calibration not in ("leave_one_day_out", "in_sample"):
+        raise ValueError(f"unknown calibration {calibration!r}")
     reference = segment_mask(times, protocol.reference)
     modes = select_modes(frequencies_hz, reference) if modes is None else list(modes)
     selected = frequencies_hz[:, modes]
     complete = np.all(np.isfinite(selected), axis=1) & np.isfinite(temperature_c)
-    covariates = temperature_features(np.where(np.isfinite(temperature_c), temperature_c, 0.0))
+    selected = np.where(complete[:, None], selected, 0.0)
+    temperature = np.where(np.isfinite(temperature_c), temperature_c, 0.0)
+    covariates = temperature_features(temperature)
 
     train = reference & complete
     reference_days = daily_medians([stamp for stamp, used in zip(times, train) if used], np.zeros(int(train.sum())))
     check_alpha(len(reference_days), alpha)
     baseline = fit_temperature_baseline(covariates[train], selected[train])
-    residuals = baseline.residuals(covariates, np.where(complete[:, None], selected, np.nan))
+    residuals = baseline.residuals(covariates, selected)
 
-    detectors = {
-        "raw_frequencies": (MahalanobisDetector(selected[train]), selected),
-        "temperature_normalized": (MahalanobisDetector(residuals[train]), residuals),
-        "pca_residual": (PCAResidualDetector(selected[train]), selected),
-    }
-    reference_start, reference_end = (stamp.date() for stamp in protocol.reference)
     arms = {}
-    for name, (detector, inputs) in detectors.items():
+    for name, scorer in _arm_scorers(selected, temperature, covariates).items():
         scores = np.full(len(times), np.nan)
-        scores[complete] = detector.score(inputs[complete])
+        scores[complete] = scorer(train, complete)
         daily = daily_medians(times, scores)
-        reference_scores = [value for day, value in daily.items() if reference_start <= day < reference_end]
+        if calibration == "leave_one_day_out":
+            daily.update(_leave_one_day_out(scorer, times, train, reference_days))
+        reference_scores = [daily[day] for day in reference_days]
         arms[name] = {
             "control_limit": conformal_limit(reference_scores, alpha),
             "reference": alarm_summary(daily, reference_scores, alpha, protocol.reference),
@@ -347,14 +590,22 @@ def run_protocol(
                 )
             ],
         }
-        if isinstance(detector, PCAResidualDetector):
-            arms[name]["retained_components"] = detector.retained
+        if name == "pca_residual":
+            arms[name]["retained_components"] = PCAResidualDetector(selected[train]).retained
 
     holdout = segment_mask(times, protocol.holdout) & complete
     changed = segment_mask(times, protocol.changed) & complete
     normalized = residuals + baseline.reference_frequencies_hz
+    uncertainty = identification_uncertainty(
+        [stamp for stamp, used in zip(times, train) if used], residuals[train], baseline.reference_frequencies_hz
+    )
+    shift_hz = np.median(normalized[changed], axis=0) - np.median(normalized[train], axis=0)
+    uncertainty["changed_shift_over_sigma"] = [
+        float(value) for value in shift_hz / np.asarray(uncertainty["identification_sigma_hz"])
+    ]
     return {
         "alpha": alpha,
+        "calibration": calibration,
         "reference_days": len(reference_days),
         "p_value_floor": 1.0 / (len(reference_days) + 1.0),
         "modes": modes,
@@ -367,6 +618,7 @@ def run_protocol(
         },
         "arms": arms,
         "temperature_sensitivity": temperature_sensitivity_check(baseline, expected_df_over_f),
+        "identification_uncertainty": uncertainty,
         "frequency_ratio": frequency_ratio_check(
             np.median(normalized[train], axis=0), np.median(normalized[changed], axis=0)
         ),

@@ -106,7 +106,7 @@ def load_tracked_modes(path: Path) -> dict:
 
 
 def run_study(data: dict, modes: list[int] | None = None) -> dict:
-    """Run all three arms. ``modes`` overrides the reference-only mode selection."""
+    """Run every detector arm. ``modes`` overrides the reference-only mode selection."""
     result = run_protocol(
         data["times"],
         data["frequencies_hz"],

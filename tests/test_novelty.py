@@ -194,3 +194,77 @@ def test_check_alpha_rejects_a_reference_period_too_short_for_alpha():
         novelty.check_alpha(98, 0.01)
     with pytest.raises(ValueError, match="alpha must be in"):
         novelty.check_alpha(500, 0.0)
+
+
+def test_leave_one_out_scores_exceed_in_sample_scores_on_a_small_reference():
+    rng = np.random.default_rng(8)
+    reference = rng.normal(size=(25, 5))
+    in_sample = novelty.MahalanobisDetector(reference).score(reference)
+    held_out = novelty.leave_one_out_scores(novelty.MahalanobisDetector, reference)
+    assert held_out.shape == (25,)
+    assert np.all(held_out > in_sample)
+
+
+def test_evaluate_states_separates_a_shifted_state_and_keeps_holdout_quiet():
+    rng = np.random.default_rng(9)
+    covariance = np.array([[1.0, 0.6, 0.0], [0.6, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    reference = rng.multivariate_normal(np.zeros(3), covariance, size=40)
+    holdout = rng.multivariate_normal(np.zeros(3), covariance, size=400)
+    shifted = rng.multivariate_normal([0.0, 0.0, 5.0], covariance, size=30)
+    # Breaks the correlation of the first two features without moving either far.
+    pattern_break = rng.multivariate_normal([3.0, -3.0, 0.0], covariance, size=30)
+
+    result = novelty.evaluate_states(
+        reference, holdout, {"shifted": shifted, "pattern_break": pattern_break}, alpha=0.05
+    )
+
+    assert result["reference_samples"] == 40
+    assert result["p_value_floor"] == pytest.approx(1 / 41)
+    raw = result["arms"]["raw_frequencies"]
+    assert raw["holdout"]["alarm_rate"] < 0.10
+    assert raw["shifted"]["alarm_rate"] > 0.9
+    assert raw["pattern_break"]["alarm_rate"] > 0.9
+    assert raw["shifted"]["median_p_value"] == pytest.approx(1 / 41)
+    with pytest.raises(ValueError, match="needs at least 99 reference days"):
+        novelty.evaluate_states(reference, holdout, {}, alpha=0.01)
+
+
+def test_knn_detector_follows_a_curved_healthy_pattern_that_mahalanobis_cannot():
+    rng = np.random.default_rng(10)
+    x = rng.uniform(-2.0, 2.0, 600)
+    training = np.column_stack((x, x**2)) + rng.normal(0.0, 0.05, (600, 2))
+    on_curve_far = np.array([[1.9, 3.61]])
+    off_curve_centre = np.array([[0.0, 1.5]])
+    knn = novelty.KNNDetector(training)
+    mahalanobis = novelty.MahalanobisDetector(training)
+    assert knn.score(off_curve_centre)[0] > 5.0 * knn.score(on_curve_far)[0]
+    assert mahalanobis.score(off_curve_centre)[0] < mahalanobis.score(on_curve_far)[0]
+
+
+def test_gaussian_process_baseline_learns_the_freezing_bend():
+    rng = np.random.default_rng(11)
+    temperature = rng.uniform(-6.0, 22.0, 3000)
+
+    def truth(t):
+        return 2.0 - 4e-4 * t - 9.6e-3 * np.minimum(t, 0.0)
+
+    frequencies = truth(temperature)[:, None] + rng.normal(0.0, 2e-3, (3000, 1))
+    baseline = novelty.GaussianProcessBaseline(temperature, frequencies)
+    grid = np.array([-5.0, -2.0, 0.0, 5.0, 15.0])
+    # A smooth kernel rounds the kink at 0 C slightly; the error stays within the noise level.
+    np.testing.assert_allclose(baseline.predict(grid)[:, 0], truth(grid), atol=2e-3)
+    assert np.std(baseline.residuals(temperature, frequencies)) == pytest.approx(2e-3, rel=0.1)
+
+
+def test_identification_uncertainty_separates_hourly_noise_from_slow_drift():
+    rng = np.random.default_rng(12)
+    start = dt.datetime(2020, 1, 1)
+    times = [start + dt.timedelta(hours=hour) for hour in range(5000) if hour % 97 != 0]
+    slow = 0.004 * np.sin(2.0 * np.pi * np.arange(len(times)) / 500.0)
+    noise = rng.normal(0.0, 0.002, len(times))
+    result = novelty.identification_uncertainty(times, (slow + noise)[:, None], [2.0])
+    assert result["identification_sigma_hz"][0] == pytest.approx(0.002, rel=0.05)
+    assert result["identification_sigma_relative"][0] == pytest.approx(0.001, rel=0.05)
+    # Noise variance 4e-6 against a total of 4e-6 + 8e-6.
+    assert result["noise_share"][0] == pytest.approx(1 / 3, abs=0.03)
+    assert result["hourly_pairs"] < len(times) - 1

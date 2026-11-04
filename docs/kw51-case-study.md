@@ -1,6 +1,6 @@
 # KW51 railway bridge case study
 
-`tools/kw51_study.py` runs three modal novelty detectors on one real bridge
+`tools/kw51_study.py` runs five modal novelty detectors on one real bridge
 with a known change of state. It answers a narrow question: on KW51, does a
 detector fitted on healthy data stay quiet on later healthy data and alarm
 after the retrofit, and does temperature normalization help?
@@ -48,6 +48,11 @@ cannot establish false-alarm or detection rates for other bridges.
   longer reference period, and the protocol refuses to run instead of
   silently never alarming. For 130 days and alpha 0.01 the rule is
   equivalent to alarming above the highest reference score.
+- Each reference day's score comes from a model fitted on the other 129
+  reference days (leave one day out). A model scores the hours it was
+  fitted on as more typical than a new healthy day, so in-sample reference
+  scores would set every limit too low. On KW51 the in-sample limits were
+  about 8% lower; no alarm count changed.
 - Detection delay is counted in days from 2019-09-28 to the first alarmed day.
 
 ### Arms
@@ -60,10 +65,19 @@ cannot establish false-alarm or detection rates for other bridges.
    freezing, where frozen ballast and bearings stiffen the deck. The
    Mahalanobis distance (shrinkage covariance) is then computed on the
    residuals.
-3. **PCA residual:** frequencies are standardized with reference statistics;
+3. **Gaussian process normalized:** as arm 2, but each mode's
+   temperature curve is a Gaussian process (squared-exponential kernel,
+   length scale chosen per mode by marginal likelihood) fitted to
+   0.5 C bin means, so the curve may bend wherever the data says rather
+   than only at a chosen hinge.
+4. **PCA residual:** frequencies are standardized with reference statistics;
    the leading components that explain 90% of reference variance (4 of 5
    here) are treated as the normal co-variation pattern, and the score is
    the norm of what is left outside them.
+5. **k nearest neighbours:** mean distance to the 10 nearest reference
+   hours in standardized frequency space. It fits no ellipse and no
+   temperature model, so it follows a curved healthy pattern, such as the
+   steeper slope below freezing, from the reference hours themselves.
 
 Timoshenko is optional. `fit_environmental_baseline` is on Timoshenko's main
 branch and not in the released `timoshenko-engine` 2.1.0, so the script falls
@@ -78,11 +92,13 @@ Pre-registered mode set (2, 4, 5, 8, 12):
 
 | Arm | Holdout false-alarm days | Post-retrofit days alarmed | First alarm (delay) | Holdout min p | Holdout max / limit | Post-retrofit min / limit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Raw frequencies | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.54 | 2.25 |
-| Temperature normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.50 | 2.28 |
-| PCA residual | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.56 | 2.94 |
+| Raw frequencies | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.50 | 2.09 |
+| Temperature normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.46 | 2.08 |
+| Gaussian process normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.031 | 0.50 | 2.10 |
+| PCA residual | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.49 | 2.55 |
+| k nearest neighbours | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.069 | 0.56 | 4.25 |
 
-All three arms meet both targets (holdout false-alarm rate at most 5%,
+All five arms meet both targets (holdout false-alarm rate at most 5%,
 at least 90% of post-retrofit days alarmed) and alarm on the first scored
 day. Every post-retrofit day reaches the smallest attainable p-value,
 1/131. The holdout min p column is the strongest evidence any healthy
@@ -104,8 +120,10 @@ The comparison also does not stress temperature normalization much. The
 changed segment (October to January) has deck temperatures from 0.7 to
 22.7 C, inside the reference range of -2.9 to 19.0 C, so the raw arm sees the
 same seasonal pattern it was trained on. The warmer holdout (1.9 to 26.3 C)
-is the real test of environmental robustness, and all three arms stayed
-below 0.6 of their limits there.
+is the real test of environmental robustness, and all five arms stayed
+below 0.6 of their limits there. The k-nearest-neighbour arm separates the
+retrofit by the widest margin (the lowest post-retrofit day at 4.25 times
+its limit).
 
 ### Post-hoc stress test
 
@@ -116,18 +134,47 @@ pre-registered result (`--modes 2 4 8`):
 
 | Arm | Holdout false-alarm days | Post-retrofit days alarmed | First alarm (delay) | Holdout min p | Holdout max / limit | Post-retrofit min / limit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Raw frequencies | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.061 | 0.56 | 1.21 |
-| Temperature normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.031 | 0.75 | 1.67 |
-| PCA residual | 7/44 (15.9%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.008 | 1.53 | 2.69 |
+| Raw frequencies | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.061 | 0.51 | 1.12 |
+| Temperature normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.031 | 0.69 | 1.54 |
+| Gaussian process normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.015 | 0.89 | 1.95 |
+| PCA residual | 7/44 (15.9%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.008 | 1.54 | 2.70 |
+| k nearest neighbours | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.061 | 0.66 | 3.06 |
 
 With small shifts, temperature normalization widens the post-retrofit margin
-(lowest daily score 1.67 times the limit, against 1.21 for raw frequencies),
-while the holdout still stays below the limit. PCA keeps 2 of 3 components,
+(lowest daily score 1.54 times the limit with the bilinear model and 1.95
+with the Gaussian process, against 1.12 for raw frequencies), while the
+holdout stays below the limit; the Gaussian process pays for its wider
+margin with a holdout day at 0.89 of its limit. The k-nearest-neighbour arm
+reaches 3.06 with the holdout at 0.66. PCA keeps 2 of 3 components,
 and its single residual direction picks up the warmer spring temperatures,
 which lie outside the reference range: 16% of holdout days alarm, far above
 the 1% the p-value rule promises for days that resemble the reference. Those
 spring days do not resemble the reference, which is exactly the
 exchangeability the guarantee assumes.
+
+## Identification uncertainty
+
+Each hourly frequency is an estimate with its own error. The true frequency
+moves little within an hour, so the difference between consecutive hourly
+estimates is mostly identification error; half its mean square is the
+error variance. Over 2,731 consecutive reference hour pairs, after the
+bilinear temperature model:
+
+| Mode | Reference Hz | Identification sigma | Residual sigma | Share of residual variance that is identification noise | Post-retrofit shift / sigma |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 1.891 | 5.1 mHz (0.27%) | 7.8 mHz | 0.44 | -1.2 |
+| 4 | 2.580 | 12.7 mHz (0.49%) | 14.0 mHz | 0.83 | -0.6 |
+| 5 | 2.926 | 4.1 mHz (0.14%) | 6.0 mHz | 0.48 | +14.9 |
+| 8 | 4.110 | 3.3 mHz (0.08%) | 3.9 mHz | 0.70 | -9.1 |
+| 12 | 6.334 | 12.7 mHz (0.20%) | 32.3 mHz | 0.15 | +8.2 |
+
+For mode 4 almost all of what the temperature model leaves is
+identification noise, so a better environmental model cannot help it. For
+mode 12 only 15% is, and the rest is slow variation the deck temperature
+does not explain, which fits its sixfold temperature sensitivity below. The
+retrofit moved modes 5, 8 and 12 by 8 to 15 hourly sigmas, while the shifts
+of modes 2 and 4 are within about one sigma of a single hour; a daily median
+of about 22 hours narrows that sigma roughly fivefold.
 
 ## Physics checks
 
@@ -176,18 +223,22 @@ moves.
   daily rate up to about 7% (95% upper bound).
 - Only deck temperature is used as a covariate. Humidity, train loading and
   the identification uncertainty of each hourly estimate are not modelled.
+- The identification noise estimate assumes the true frequency is constant
+  within an hour; train passages and fast temperature changes make it a
+  slight overestimate.
 - The p-value guarantee assumes healthy days are exchangeable with the
   reference days. Consecutive days are correlated and seasons drift, so
   the 1% false-alarm bound is approximate, as the PCA arm's warm holdout
   shows.
 - With 130 reference days the strongest attainable evidence is p = 1/131;
   every detection here sits at that floor, so the p-values cannot rank the
-  three arms' post-retrofit evidence against each other.
+  five arms' post-retrofit evidence against each other.
 
 The control rule changed from the 99th percentile of the reference daily
-scores to the conformal p-value. With the percentile, 2 of 130 reference
-days exceeded the limit by construction and the post-hoc PCA arm alarmed on
-10 of 44 holdout days; every other alarm count is unchanged.
+scores to the conformal p-value, and later to leave-one-day-out calibration.
+With the percentile, 2 of 130 reference days exceeded the limit by
+construction and the post-hoc PCA arm alarmed on 10 of 44 holdout days;
+every other alarm count is unchanged across the three rules.
 
 ## Reproduce
 
