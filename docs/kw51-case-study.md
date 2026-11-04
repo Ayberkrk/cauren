@@ -28,7 +28,7 @@ cannot establish false-alarm or detection rates for other bridges.
 
 | Segment | Dates | Use |
 | --- | --- | --- |
-| Reference | 2018-10-01 to 2019-03-31 | fit every model and set every control limit |
+| Reference | 2018-10-01 to 2019-03-31 | fit every model; reference days for the p-values |
 | Holdout | 2019-04-01 to 2019-05-14 | healthy, unseen: false alarms |
 | Retrofit | 2019-05-15 to 2019-09-27 | excluded |
 | Changed | 2019-09-28 to 2020-01-15 | retrofitted structure: detections |
@@ -39,9 +39,15 @@ cannot establish false-alarm or detection rates for other bridges.
   of these modes or the deck temperature are dropped (2,892 reference, 969
   holdout and 1,646 changed hours remain).
 - Each arm produces an hourly score. The daily score is the median of a day's
-  hourly scores, using days with at least 6 scored hours. The control limit
-  is the 99th percentile of the reference daily scores, so about 1% of
-  reference days (2 of 130) exceed it by construction.
+  hourly scores, using days with at least 6 scored hours.
+- Each later day gets a conformal p-value against the 130 reference days:
+  p = (1 + reference days scoring at least as high) / 131. A day alarms when
+  p <= 0.01. If a healthy day is exchangeable with the reference days, this
+  keeps its false-alarm probability at most 1%. The smallest attainable p is
+  1/131 = 0.0076, so alpha 0.01 is reachable; a smaller alpha would need a
+  longer reference period, and the protocol refuses to run instead of
+  silently never alarming. For 130 days and alpha 0.01 the rule is
+  equivalent to alarming above the highest reference score.
 - Detection delay is counted in days from 2019-09-28 to the first alarmed day.
 
 ### Arms
@@ -62,24 +68,29 @@ cannot establish false-alarm or detection rates for other bridges.
 Timoshenko is optional. `fit_environmental_baseline` is on Timoshenko's main
 branch and not in the released `timoshenko-engine` 2.1.0, so the script falls
 back to the same ordinary least-squares fit in numpy when it is missing. The
-results below were produced with Timoshenko at commit `514f696`; the numpy
-fallback gives identical alarms and coefficients.
+results below were produced with the numpy fit; under the earlier
+percentile limit, Timoshenko at commit `514f696` gave identical alarms and
+coefficients.
 
 ## Results
 
 Pre-registered mode set (2, 4, 5, 8, 12):
 
-| Arm | Holdout false-alarm days | Post-retrofit days alarmed | First alarm (delay) | Holdout max / limit | Post-retrofit min / limit |
-| --- | --- | --- | --- | --- | --- |
-| Raw frequencies | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.60 | 2.48 |
-| Temperature normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.58 | 2.64 |
-| PCA residual | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.60 | 3.13 |
+| Arm | Holdout false-alarm days | Post-retrofit days alarmed | First alarm (delay) | Holdout min p | Holdout max / limit | Post-retrofit min / limit |
+| --- | --- | --- | --- | --- | --- | --- |
+| Raw frequencies | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.54 | 2.25 |
+| Temperature normalized | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.50 | 2.28 |
+| PCA residual | 0/44 (0.0%) | 103/103 (100.0%) | 2019-09-28 (0 d) | 0.053 | 0.56 | 2.94 |
 
 All three arms meet both targets (holdout false-alarm rate at most 5%,
 at least 90% of post-retrofit days alarmed) and alarm on the first scored
-day. The last two columns show the margin: the highest holdout daily score
-and the lowest post-retrofit daily score, each divided by the arm's control
-limit. Values below 1 stay quiet, values above 1 alarm.
+day. Every post-retrofit day reaches the smallest attainable p-value,
+1/131. The holdout min p column is the strongest evidence any healthy
+holdout day gave against "unchanged"; 0.053 means the most unusual holdout
+day was still matched or exceeded by 6 of the 130 reference days. The last
+two columns show the margin: the highest holdout daily score and the lowest
+post-retrofit daily score, each divided by the highest score that does not
+alarm. Values below 1 stay quiet, values above 1 alarm.
 
 ### Why the arms look alike here
 
@@ -103,18 +114,20 @@ the three modes that move by less than 1% (2, 4, 8). This subset was picked
 after looking at the post-retrofit shifts, so it is illustrative, not a
 pre-registered result (`--modes 2 4 8`):
 
-| Arm | Holdout false-alarm days | Post-retrofit days alarmed | First alarm (delay) | Holdout max / limit | Post-retrofit min / limit |
-| --- | --- | --- | --- | --- | --- |
-| Raw frequencies | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.58 | 1.27 |
-| Temperature normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.82 | 1.82 |
-| PCA residual | 10/44 (22.7%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 1.93 | 3.38 |
+| Arm | Holdout false-alarm days | Post-retrofit days alarmed | First alarm (delay) | Holdout min p | Holdout max / limit | Post-retrofit min / limit |
+| --- | --- | --- | --- | --- | --- | --- |
+| Raw frequencies | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.061 | 0.56 | 1.21 |
+| Temperature normalized | 0/44 (0.0%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.031 | 0.75 | 1.67 |
+| PCA residual | 7/44 (15.9%) | 107/107 (100.0%) | 2019-09-28 (0 d) | 0.008 | 1.53 | 2.69 |
 
 With small shifts, temperature normalization widens the post-retrofit margin
-(lowest daily score 1.82 times the limit, against 1.27 for raw frequencies),
+(lowest daily score 1.67 times the limit, against 1.21 for raw frequencies),
 while the holdout still stays below the limit. PCA keeps 2 of 3 components,
 and its single residual direction picks up the warmer spring temperatures,
-which lie outside the reference range: 23% of holdout days alarm, above the
-5% target.
+which lie outside the reference range: 16% of holdout days alarm, far above
+the 1% the p-value rule promises for days that resemble the reference. Those
+spring days do not resemble the reference, which is exactly the
+exchangeability the guarantee assumes.
 
 ## Physics checks
 
@@ -163,7 +176,18 @@ moves.
   daily rate up to about 7% (95% upper bound).
 - Only deck temperature is used as a covariate. Humidity, train loading and
   the identification uncertainty of each hourly estimate are not modelled.
-- The 99th percentile limit uses 130 reference days and is itself uncertain.
+- The p-value guarantee assumes healthy days are exchangeable with the
+  reference days. Consecutive days are correlated and seasons drift, so
+  the 1% false-alarm bound is approximate, as the PCA arm's warm holdout
+  shows.
+- With 130 reference days the strongest attainable evidence is p = 1/131;
+  every detection here sits at that floor, so the p-values cannot rank the
+  three arms' post-retrofit evidence against each other.
+
+The control rule changed from the 99th percentile of the reference daily
+scores to the conformal p-value. With the percentile, 2 of 130 reference
+days exceeded the limit by construction and the post-hoc PCA arm alarmed on
+10 of 44 holdout days; every other alarm count is unchanged.
 
 ## Reproduce
 

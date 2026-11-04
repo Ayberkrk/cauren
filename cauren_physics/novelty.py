@@ -9,9 +9,10 @@ code so the results are comparable across structures:
 3. Three detectors are fitted on the reference period: Mahalanobis distance
    of the raw frequencies, Mahalanobis distance of the temperature residuals,
    and the residual outside the leading principal components.
-4. Hourly scores are reduced to daily medians, the control limit is set on
-   the reference days, and alarms are counted in a later healthy holdout
-   (false alarms) and after the known change (detections).
+4. Hourly scores are reduced to daily medians. Each day gets a conformal
+   p-value against the reference days, and a day alarms when p <= alpha.
+   Alarms are counted in a later healthy holdout (false alarms) and after
+   the known change (detections).
 
 A study supplies the hourly times, frequencies and temperature plus its
 segment dates; nothing here is specific to one bridge. Unlike
@@ -21,6 +22,7 @@ segment dates; nothing here is specific to one bridge. Unlike
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,7 +31,8 @@ import numpy as np
 # cannot influence which modes are monitored.
 MAX_REFERENCE_MISSING = 0.10
 HINGE_TEMPERATURE_C = 0.0
-CONTROL_PERCENTILE = 99.0
+# Target false-alarm rate per healthy day. Needs at least 99 reference days.
+ALPHA = 0.01
 MIN_HOURS_PER_DAY = 6
 PCA_RETAINED_VARIANCE = 0.90
 
@@ -170,24 +173,72 @@ def daily_medians(times, scores, min_hours: int = MIN_HOURS_PER_DAY) -> dict[dt.
     return {day: float(np.median(values)) for day, values in sorted(by_day.items()) if len(values) >= min_hours}
 
 
-def control_limit(reference_daily: dict[dt.date, float], percentile: float = CONTROL_PERCENTILE) -> float:
-    return float(np.percentile(list(reference_daily.values()), percentile))
+def conformal_p_values(reference_scores, scores) -> np.ndarray:
+    """Conformal p-value of each score against the reference scores.
+
+    p = (1 + number of reference scores >= s) / (n + 1). If a healthy day's
+    score is exchangeable with the n reference days, P(p <= alpha) <= alpha
+    for every alpha, so the p-value is the evidence a day gives against
+    "still healthy". The smallest attainable value is 1 / (n + 1).
+    """
+    reference = np.sort(np.asarray(reference_scores, dtype=float))
+    values = np.asarray(scores, dtype=float)
+    at_or_above = len(reference) - np.searchsorted(reference, values, side="left")
+    return (1.0 + at_or_above) / (len(reference) + 1.0)
 
 
-def alarm_summary(daily: dict[dt.date, float], limit: float, segment: Segment) -> dict:
-    """Alarm counts within a segment and the delay to its first alarmed day."""
+def check_alpha(reference_days: int, alpha: float) -> None:
+    """Refuse a false-alarm rate the reference period is too short to support.
+
+    No day can reach a p-value below 1 / (n + 1), so with fewer than
+    1 / alpha - 1 reference days the detector could never alarm. That is a
+    flaw in the study design, so it is reported before anything is scored.
+    """
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    floor = 1.0 / (reference_days + 1.0)
+    if alpha < floor:
+        needed = math.ceil(1.0 / alpha - 1.0)
+        raise ValueError(
+            f"alpha={alpha} needs at least {needed} reference days, but the reference period has "
+            f"{reference_days}; the smallest attainable p-value is {floor:.4g}"
+        )
+
+
+def conformal_limit(reference_scores, alpha: float) -> float:
+    """Highest score that does not alarm: the k-th smallest reference score.
+
+    k = ceil((n + 1)(1 - alpha)). A score above it has p <= alpha, so the
+    ratio of a score to this limit shows the margin to alarming.
+    """
+    reference = np.sort(np.asarray(reference_scores, dtype=float))
+    check_alpha(len(reference), alpha)
+    k = math.ceil((len(reference) + 1) * (1.0 - alpha) - 1e-9)
+    return float(reference[k - 1])
+
+
+def alarm_summary(daily: dict[dt.date, float], reference_scores, alpha: float, segment: Segment) -> dict:
+    """Alarm counts within a segment and the delay to its first alarmed day.
+
+    A day alarms when its conformal p-value against ``reference_scores`` is
+    at most ``alpha``. The score-to-limit ratios show the margin: below 1
+    stays quiet, above 1 alarms.
+    """
     start, end = segment
     days = [day for day in daily if start.date() <= day < end.date()]
-    alarmed = [day for day in days if daily[day] > limit]
-    values = [daily[day] for day in days]
+    values = np.array([daily[day] for day in days], dtype=float)
+    p_values = conformal_p_values(reference_scores, values)
+    alarmed = [day for day, p_value in zip(days, p_values) if p_value <= alpha + 1e-12]
+    limit = conformal_limit(reference_scores, alpha)
     return {
         "days": len(days),
         "alarmed_days": len(alarmed),
         "alarm_rate": len(alarmed) / len(days) if days else float("nan"),
         "first_alarm": alarmed[0].isoformat() if alarmed else None,
         "delay_days": (alarmed[0] - start.date()).days if alarmed else None,
-        "min_over_limit": min(values) / limit if values else float("nan"),
-        "max_over_limit": max(values) / limit if values else float("nan"),
+        "min_p_value": float(p_values.min()) if days else float("nan"),
+        "min_over_limit": float(values.min()) / limit if days else float("nan"),
+        "max_over_limit": float(values.max()) / limit if days else float("nan"),
     }
 
 
@@ -252,11 +303,13 @@ def run_protocol(
     *,
     expected_df_over_f: float,
     modes: list[int] | None = None,
+    alpha: float = ALPHA,
 ) -> dict:
     """Run all three detector arms on hourly frequencies and temperature.
 
     ``modes`` overrides the reference-only mode selection; a study that
-    does so must report the result as post hoc.
+    does so must report the result as post hoc. Raises ``ValueError``
+    before scoring when the reference period has too few days for ``alpha``.
     """
     reference = segment_mask(times, protocol.reference)
     modes = select_modes(frequencies_hz, reference) if modes is None else list(modes)
@@ -265,6 +318,8 @@ def run_protocol(
     covariates = temperature_features(np.where(np.isfinite(temperature_c), temperature_c, 0.0))
 
     train = reference & complete
+    reference_days = daily_medians([stamp for stamp, used in zip(times, train) if used], np.zeros(int(train.sum())))
+    check_alpha(len(reference_days), alpha)
     baseline = fit_temperature_baseline(covariates[train], selected[train])
     residuals = baseline.residuals(covariates, np.where(complete[:, None], selected, np.nan))
 
@@ -279,13 +334,18 @@ def run_protocol(
         scores = np.full(len(times), np.nan)
         scores[complete] = detector.score(inputs[complete])
         daily = daily_medians(times, scores)
-        reference_daily = {day: value for day, value in daily.items() if reference_start <= day < reference_end}
-        limit = control_limit(reference_daily)
+        reference_scores = [value for day, value in daily.items() if reference_start <= day < reference_end]
         arms[name] = {
-            "control_limit": limit,
-            "reference": alarm_summary(daily, limit, protocol.reference),
-            "holdout": alarm_summary(daily, limit, protocol.holdout),
-            "changed": alarm_summary(daily, limit, protocol.changed),
+            "control_limit": conformal_limit(reference_scores, alpha),
+            "reference": alarm_summary(daily, reference_scores, alpha, protocol.reference),
+            "holdout": alarm_summary(daily, reference_scores, alpha, protocol.holdout),
+            "changed": alarm_summary(daily, reference_scores, alpha, protocol.changed),
+            "daily": [
+                {"date": day.isoformat(), "score": value, "p_value": float(p_value)}
+                for (day, value), p_value in zip(
+                    daily.items(), conformal_p_values(reference_scores, list(daily.values()))
+                )
+            ],
         }
         if isinstance(detector, PCAResidualDetector):
             arms[name]["retained_components"] = detector.retained
@@ -294,6 +354,9 @@ def run_protocol(
     changed = segment_mask(times, protocol.changed) & complete
     normalized = residuals + baseline.reference_frequencies_hz
     return {
+        "alpha": alpha,
+        "reference_days": len(reference_days),
+        "p_value_floor": 1.0 / (len(reference_days) + 1.0),
         "modes": modes,
         "reference_hz": [float(value) for value in baseline.reference_frequencies_hz],
         "baseline_source": baseline.source,
@@ -313,8 +376,8 @@ def run_protocol(
 def markdown_table(result: dict, changed_label: str = "Post-change") -> str:
     lines = [
         f"| Arm | Holdout false-alarm days | {changed_label} days alarmed | First alarm (delay) "
-        f"| Holdout max / limit | {changed_label} min / limit |",
-        "| --- | --- | --- | --- | --- | --- |",
+        f"| Holdout min p | Holdout max / limit | {changed_label} min / limit |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for name, arm in result["arms"].items():
         holdout, changed = arm["holdout"], arm["changed"]
@@ -322,6 +385,6 @@ def markdown_table(result: dict, changed_label: str = "Post-change") -> str:
         lines.append(
             f"| {name} | {holdout['alarmed_days']}/{holdout['days']} ({100 * holdout['alarm_rate']:.1f}%) "
             f"| {changed['alarmed_days']}/{changed['days']} ({100 * changed['alarm_rate']:.1f}%) | {delay} "
-            f"| {holdout['max_over_limit']:.2f} | {changed['min_over_limit']:.2f} |"
+            f"| {holdout['min_p_value']:.3f} | {holdout['max_over_limit']:.2f} | {changed['min_over_limit']:.2f} |"
         )
     return "\n".join(lines)

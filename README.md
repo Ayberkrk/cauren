@@ -52,8 +52,12 @@ particular forbid passing the data to third parties.
    detection runs on the residuals.
 3. **Novelty detection.** Detectors are fitted on a reference period only:
    raw-frequency Mahalanobis distance, temperature-normalized residual
-   Mahalanobis distance, and a PCA residual. The control limit is the 99th
-   percentile of the reference daily scores.
+   Mahalanobis distance, and a PCA residual. Each later day gets a conformal
+   p-value against the reference days, and alarms when p <= 0.01. If a
+   healthy day resembles the reference days, its false-alarm probability is
+   at most 1%. A reference period too short for the chosen rate is refused
+   before anything is scored, rather than producing a detector that can
+   never alarm.
 4. **Evaluation.** False alarms are counted on a later healthy holdout and
    detections after the known change, with the delay to the first alarm.
 
@@ -73,8 +77,8 @@ baseline.
 The retrofit moved two modes by about 2%, which makes this an easy case.
 In a post-hoc rerun on the three least-shifted modes, temperature
 normalization widened the detection margin (lowest post-retrofit score
-1.82 times the limit, against 1.27 raw), while the PCA residual alarmed
-on 23% of the warmer holdout days. Fitted temperature slopes are negative
+1.67 times the limit, against 1.21 raw), while the PCA residual alarmed
+on 16% of the warmer holdout days. Fitted temperature slopes are negative
 for every mode, and the uneven, mixed-sign shifts are consistent with a
 local change. This is one bridge and one intervention, not a validation.
 Details are in the [KW51 case study](docs/kw51-case-study.md).
@@ -87,12 +91,14 @@ Details are in the [KW51 case study](docs/kw51-case-study.md).
   and the uncertainty of each identified frequency are not modelled.
 - Short holdouts leave wide uncertainty on false-alarm rates: 0 of 44 days
   still allows a true daily rate up to about 7%.
+- The 1% false-alarm guarantee assumes healthy days resemble the reference
+  days. Correlated days and seasons outside the reference range weaken it.
 
 ## Reproduce
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 34 tests with pytest only (47 total with numpy, scipy and timoshenko-engine)
+python3 -m pytest tests/            # 34 tests with pytest only (51 total with numpy, scipy and timoshenko-engine)
 
 pip install -e '.[study]'           # numpy and scipy for the case studies
 python3 tools/kw51_study.py --download

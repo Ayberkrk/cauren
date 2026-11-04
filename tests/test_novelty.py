@@ -97,15 +97,15 @@ def test_daily_medians_skip_sparse_days_and_alarm_summary_counts_delay():
     daily = novelty.daily_medians(times, scores, min_hours=6)
     assert list(daily) == [start.date(), start.date() + dt.timedelta(days=1)]
 
-    reference = {dt.date(2019, 1, day): float(day) for day in range(1, 31)}
-    limit = novelty.control_limit(reference, percentile=50.0)
-    assert limit == pytest.approx(15.5)
-
-    summary = novelty.alarm_summary(daily, 2.0, (start, start + dt.timedelta(days=3)))
+    # 199 reference scores of 0..1.98: the conformal limit at alpha 0.01 is
+    # the second largest, so 1.0 stays quiet and 5.0 alarms.
+    reference = [index / 100.0 for index in range(199)]
+    summary = novelty.alarm_summary(daily, reference, 0.01, (start, start + dt.timedelta(days=3)))
     assert summary["days"] == 2
     assert summary["alarmed_days"] == 1
     assert summary["delay_days"] == 1
-    assert summary["max_over_limit"] == pytest.approx(2.5)
+    assert summary["min_p_value"] == pytest.approx(1 / 200)
+    assert summary["max_over_limit"] == pytest.approx(5.0 / 1.97)
 
 
 def test_frequency_ratio_check_distinguishes_global_from_local_change():
@@ -140,13 +140,57 @@ def test_run_protocol_detects_a_local_change_smaller_than_the_seasonal_swing():
     result = novelty.run_protocol(
         times, frequencies, temperature, protocol, expected_df_over_f=STEEL_DF_OVER_F_PER_K
     )
+    with pytest.raises(ValueError, match="needs at least 999 reference days"):
+        novelty.run_protocol(
+            times, frequencies, temperature, protocol, expected_df_over_f=STEEL_DF_OVER_F_PER_K, alpha=0.001
+        )
 
+    assert result["reference_days"] == 120
+    assert result["p_value_floor"] == pytest.approx(1 / 121)
     assert result["modes"] == [0, 1, 2]
     assert result["complete_hours"]["reference"] == 24 * 120 - 1
     normalized = result["arms"]["temperature_normalized"]
     assert normalized["holdout"]["alarmed_days"] == 0
     assert normalized["changed"]["alarm_rate"] == 1.0
     assert normalized["changed"]["delay_days"] == 0
+    assert normalized["changed"]["min_p_value"] == pytest.approx(1 / 121)
+    assert len(normalized["daily"]) == 200
     assert result["frequency_ratio"]["pattern"] == "local"
     assert all(row["sign_ok"] for row in result["temperature_sensitivity"])
     assert "Post-change days alarmed" in novelty.markdown_table(result)
+
+
+def test_conformal_p_values_count_reference_scores_at_or_above():
+    reference = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    p_values = novelty.conformal_p_values(reference, [10.0, 9.0, 5.0, 0.0])
+    np.testing.assert_allclose(p_values, [1 / 10, 2 / 10, 6 / 10, 1.0])
+
+
+def test_conformal_limit_alarms_exactly_where_p_is_at_most_alpha():
+    rng = np.random.default_rng(6)
+    reference = rng.normal(size=150)
+    scores = np.concatenate((rng.normal(size=500), np.sort(reference)))
+    for alpha in (0.01, 0.05, 0.2):
+        limit = novelty.conformal_limit(reference, alpha)
+        by_p = novelty.conformal_p_values(reference, scores) <= alpha + 1e-12
+        np.testing.assert_array_equal(scores > limit, by_p)
+    assert novelty.conformal_limit(np.arange(1.0, 100.0), 0.01) == 99.0
+    assert novelty.conformal_limit(np.arange(1.0, 100.0), 0.05) == 95.0
+
+
+def test_conformal_p_values_hold_the_false_alarm_rate_on_exchangeable_days():
+    rng = np.random.default_rng(7)
+    trials = 20000
+    reference = rng.normal(size=(trials, 99))
+    new_day = rng.normal(size=trials)
+    alarms = [novelty.conformal_p_values(row, [value])[0] <= 0.01 for row, value in zip(reference, new_day)]
+    # The exact rate is 1/100; the bound allows for Monte Carlo noise.
+    assert np.mean(alarms) < 0.013
+
+
+def test_check_alpha_rejects_a_reference_period_too_short_for_alpha():
+    novelty.check_alpha(99, 0.01)
+    with pytest.raises(ValueError, match="needs at least 99 reference days"):
+        novelty.check_alpha(98, 0.01)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        novelty.check_alpha(500, 0.0)
