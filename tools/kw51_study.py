@@ -10,11 +10,11 @@ Three detectors share one protocol: fit on the reference period, set the
 control limit at the 99th percentile of the reference daily scores, then
 count alarmed days in a later healthy holdout (false alarms) and after the
 retrofit (detections). This is a single-bridge case study, not a validation
-of Cauren's anomaly detection in general.
+of these detectors in general.
 
 The data is not bundled. ``--download`` fetches ``trackedmodes.zip`` (about
 13 MB) into ``data/kw51/raw/``, which is gitignored. Needs numpy and scipy
-(``pip install -e '.[dataset]'``). Timoshenko's ``fit_environmental_baseline``
+(``pip install -e '.[study]'``). Timoshenko's ``fit_environmental_baseline``
 is used for the temperature fit when it is installed; otherwise an identical
 ordinary least-squares fit runs here.
 

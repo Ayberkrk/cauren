@@ -2,7 +2,7 @@
 
 Deliberately dependency-free: it uses `ast.parse` rather than importing
 anything, so it counts test functions the same way on every CI leg
-regardless of which optional extras (pandas/torch/PyYAML) happen to be
+regardless of which optional extras (numpy/scipy/timoshenko) happen to be
 installed there. If someone adds or removes a test without updating the
 docs, this fails with the actual current numbers rather than letting the
 docs silently drift.
@@ -21,10 +21,8 @@ def _module_level_importorskip(tree: ast.Module) -> bool:
     """Does this file's top level call pytest.importorskip(...)?
 
     Those are exactly the modules that get skipped as a whole (not
-    individual tests) when an optional dependency (pandas/torch/PyYAML)
-    isn't installed -- see tests/test_bridge_scour_risk_mapping.py,
-    tests/test_checkpoint_selection.py, and
-    tests/test_training_feedback_ingestion.py for the pattern.
+    individual tests) when an optional dependency isn't installed -- see
+    tests/test_kw51_study.py for the pattern.
     """
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -70,7 +68,7 @@ def test_readme_and_contributing_report_the_actual_test_counts():
         text = (REPO_ROOT / doc_name).read_text(encoding="utf-8")
         assert f"{minimal} tests" in text, (
             f"{doc_name} doesn't mention '{minimal} tests' (the count with only the minimal "
-            f"dependency set installed -- pytest/fastapi/pydantic/httpx). Actual: {minimal} "
+            f"dependency set installed, pytest only). Actual: {minimal} "
             f"minimal, {total} total across tests/. Update {doc_name}'s wording."
         )
         assert f"{total} total" in text, (

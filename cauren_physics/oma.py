@@ -18,12 +18,11 @@ Single-channel peak-picking works without optional packages. When Timoshenko
 also available. A structure's natural frequencies
 dropping over time relative to a baseline is a standard structural-health
 early-warning sign (stiffness loss from cracking, foundation movement,
-member damage, etc.) -- see `compare_to_baseline`, which is how this module's
-output is meant to feed into `cauren_physics.civil.CivilPhysics`.
+member damage, etc.) -- see `compare_to_baseline`.
 
-This produces a decision-support signal only, consistent with the rest of
-Cauren: a frequency drop is evidence to route to a structural engineer for
-review, not an automated damage verdict.
+A frequency drop alone is not a damage verdict: temperature and other
+environmental effects move natural frequencies too, which is why the bridge
+studies in `tools/` normalize for them before novelty detection.
 """
 
 from __future__ import annotations

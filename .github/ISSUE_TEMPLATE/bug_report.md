@@ -12,13 +12,13 @@ A clear description of the incorrect behavior or error.
 What you expected instead.
 
 **Steps to reproduce**
-The smallest input, request, or command that triggers it. Include the
-exact payload if it is an API call.
+The smallest input or command that triggers it. Name the dataset and
+any non-default options.
 
 **Environment**
 - Python version:
 - OS:
-- Relevant env vars set (e.g. `CAUREN_CORE_BACKBONE`, `CAUREN_RUNTIME_MODE`):
+- numpy / scipy / timoshenko-engine versions, if installed:
 
 **Logs / traceback**
 Paste the exact error text if there is one.

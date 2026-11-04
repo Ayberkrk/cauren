@@ -30,23 +30,13 @@ CLAUDE.md
 # Local virtual environments
 .venv/
 venv/
-LLM/.venv/
-Simulator/venv/
+.venv_test/
 
 # Runtime and generated outputs
 output/
 tmp/
 artifacts/
 runtime_outputs/
-LLM/output/
-LLM/artifacts/
-Hybrid-Model/results/
-Hybrid-Model/plots/
-Hybrid-Model/core/plots/
-XAI-Model/results/
-LLM/XAI-Model/results/
-catboost_info/
-Hybrid-Model/catboost_info/
 
 # Local runtime state
 *.log
@@ -56,22 +46,21 @@ Hybrid-Model/catboost_info/
 # Large generated archives and bundles
 *.zip
 *.tar.gz
+*.h5
 
-# Large, reproducible-from-public-sources training datasets.
-# data/cauren_civil/ stays tracked (it's a tiny bundled example); the
-# real bridge dataset built from FHWA/USGS/FEMA sources is ~1.5GB and
-# regenerable, so it doesn't belong in git. See data/cauren_bridge/dataset_summary.json
-# for provenance and tools/ for the (re)build path.
+# Datasets built by the decision-support prototype (see the
+# decision-support-prototype tag). They may still exist in local checkouts.
 data/cauren_bridge/
 data/cauren_bridge_v4/
-
-# Large NYC Department of Buildings extracts and derived research tables.
-# They are reproducible with tools/download_nyc_civil_sources.py and
-# tools/download_nyc_cohort_findings.py and kept local; the manifest, hashes,
-# builder, and audits provide provenance.
-data/cauren_civil_nyc/raw/
-data/cauren_civil_nyc/normalized/
+data/cauren_civil_nyc/
 
 # KW51 bridge monitoring data (Zenodo 3745914, CC BY-NC-SA 4.0). Downloaded by
 # tools/kw51_study.py --download and never committed.
 data/kw51/
+
+# Z24 bridge data (KU Leuven). Its terms forbid passing the data to third
+# parties, so it must never be committed.
+data/z24/
+
+# Hell Bridge Test Arena data (Zenodo 14028239, CC BY 4.0, about 2.5 GB).
+data/hbta/

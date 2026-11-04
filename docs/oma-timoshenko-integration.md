@@ -1,12 +1,14 @@
 # OMA and Timoshenko integration
 
-This note records why and how Cauren's operational modal analysis was changed when it adopted Timoshenko Engine 2.0 as an optional backend. Results remain decision support for engineering review, not damage verdicts.
+This note records why and how Cauren's operational modal analysis was changed when it adopted Timoshenko Engine 2.0 as an optional backend. Identified frequency changes are inputs to damage detection, not damage verdicts on their own.
 
-Timoshenko is optional. `cauren_physics/timoshenko_adapter.py` loads it only when version 2.0 or newer is installed; otherwise every calculation below runs on Cauren's own pure-Python path, and both paths are tested to agree. Cauren-specific risk thresholds and interpretation stay in Cauren.
+The files `tools/run_explainable_review.py` and `tests/test_explainable_review.py` named below belonged to the decision-support prototype, which is preserved at the `decision-support-prototype` tag. The vibration CSV loader now lives in `tools/run_oma_identification.py`.
+
+Timoshenko is optional. `cauren_physics/timoshenko_adapter.py` loads it only when version 2.0 or newer is installed; otherwise every calculation below runs on Cauren's own pure-Python path, and both paths are tested to agree. Cauren-specific thresholds and interpretation stay in Cauren.
 
 ### 1. Mode pairing and resolution-limited drift
 
-- Why: one observed mode was being reused for several reference modes. This could turn a missing mode into a false large frequency drop and a civil risk score of 1.0. Small differences below the FFT resolution could also create a watch finding.
+- Why: one observed mode was being reused for several reference modes. This could turn a missing mode into a false large frequency drop. Small differences below the FFT resolution could also create a watch finding.
 - How: test cases were added first and run against the old implementation. They reproduced the false alarm and the resolution-limited watch finding. Pairing now uses nearest log frequency, preserves original indices, and retains at most one observation per reference. The existing absolute matching tolerance is applied after pairing. A measured difference within one frequency-resolution bin is retained in `drift_pct`, marked `resolution_limited`, assigned severity `none`, and excluded from `max_drop_pct`.
 - Files: `cauren_physics/oma.py`, `cauren_physics/timoshenko_adapter.py`, `tests/test_oma_identification.py`.
 

@@ -5,8 +5,8 @@ with a known change of state. It answers a narrow question: on KW51, does a
 detector fitted on healthy data stay quiet on later healthy data and alarm
 after the retrofit, and does temperature normalization help?
 
-This is a single-bridge case study, not a validation of Cauren's anomaly
-detection. One structure, one change, and one season of post-change data
+This is a single-bridge case study, not a validation of these detectors
+in general. One structure, one change, and one season of post-change data
 cannot establish false-alarm or detection rates for other bridges.
 
 ## Data
@@ -168,7 +168,7 @@ moves.
 ## Reproduce
 
 ```bash
-pip install -e '.[dataset]'
+pip install -e '.[study]'
 python3 tools/kw51_study.py --download
 python3 tools/kw51_study.py --modes 2 4 8
 ```
