@@ -32,7 +32,7 @@ either misses small damage or alarms every cold snap.
 | **KW51**, steel railway bowstring, Leuven (Maes and Lombaert) | 15 months of hourly modal frequencies and temperatures; diagonal connections strengthened in 2019 | Open, Zenodo [3745914](https://doi.org/10.5281/zenodo.3745914), CC BY-NC-SA 4.0 | Done, see [case study](docs/kw51-case-study.md) |
 | **Hell Bridge Test Arena**, riveted steel truss railway bridge (Norway) | Two undamaged recordings and eight imposed damage states, shaker excitation, 100 Hz | Open, Zenodo [14632942](https://doi.org/10.5281/zenodo.14632942), CC BY 4.0 | Done, see [case study](docs/hbta-case-study.md) |
 | **Vänersborg**, riveted steel bascule railway bridge (Sweden) | 64 bridge openings with strain, acceleration and weather; a real counterweight truss fracture in March 2023 | Open, Zenodo [8300495](https://doi.org/10.5281/zenodo.8300495), CC BY 4.0 | Done, see [case study](docs/vanersborg-case-study.md) |
-| **Z24**, post-tensioned concrete box girder (Switzerland) | One year of monitoring with air and soil temperatures, then progressive damage tests before demolition | On request from [KU Leuven](https://bwk.kuleuven.be/bwm/z24), non-commercial research | Access requested |
+| **Z24**, post-tensioned concrete box girder (Switzerland) | One year of monitoring with air and soil temperatures, then progressive damage tests before demolition | On request from [KU Leuven](https://bwk.kuleuven.be/bwm/z24), non-commercial research | Done, see [case study](docs/z24-case-study.md) |
 
 No monitoring data is committed to this repository. Each study downloads
 or reads its data into a gitignored folder under `data/`. Z24's terms in
@@ -111,13 +111,28 @@ by a reference-only rule, added after the miss, the Mahalanobis distance
 flagged all six openings after the fracture and one of 17 healthy ones.
 Details are in the [Vänersborg case study](docs/vanersborg-case-study.md).
 
-The three studies are compared in [Results across bridges](docs/results-summary.md).
+**Z24.** The one data set with a healthy reference spanning a winter and
+real damage afterwards. Hourly frequencies come from Frequency Domain
+Decomposition of seven channels, tracked by mode shape because frozen
+asphalt raises them by up to 12%. No arm with temperature normalization or
+k nearest neighbours alarmed on any of 26 healthy summer days; k nearest
+neighbours flagged all 19 scored damaged days from the first pier
+settlement, the Gaussian process 15 and the bilinear model 13, while raw
+frequencies saw the damage on 5. With a reference that spans the seasons,
+the CUSUM that failed on KW51 raised no healthy false alarm for five of
+seven arms and reached the damage within 1 to 2 days. Details are in the
+[Z24 case study](docs/z24-case-study.md).
+
+The four studies are compared in [Results across bridges](docs/results-summary.md).
 
 ## Limitations
 
-- No bridge combines real damage with a healthy reference spanning the
-  seasons: KW51's change is a strengthening, HBTA has two healthy
-  recordings, and Vänersborg's reference covers 11 winter days.
+- Only Z24 combines real damage with a healthy reference spanning the
+  seasons, and its damage was imposed during a test campaign on a bridge
+  about to be demolished. KW51's change is a strengthening, HBTA has two
+  healthy recordings, and Vänersborg's reference covers 11 winter days.
+- Two Z24 identification rules (the MAC threshold and choosing the strongest
+  candidate peak) were changed after a first run; both runs are reported.
 - The Vänersborg detection depends on a data-quality rule added after the
   pre-registered analysis missed the fracture.
 - Short holdouts leave wide uncertainty on false-alarm rates: 0 of 44 days
@@ -130,7 +145,7 @@ The three studies are compared in [Results across bridges](docs/results-summary.
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 34 tests with pytest only (69 total with numpy, scipy and timoshenko-engine)
+python3 -m pytest tests/            # 34 tests with pytest only (76 total with numpy, scipy and timoshenko-engine)
 
 pip install -e '.[study]'           # numpy, scipy, h5py and pandas for the case studies
 python3 tools/kw51_study.py --download
@@ -140,6 +155,8 @@ python3 tools/hbta_study.py --fetch      # about 145 MB of the 2.5 GB record
 python3 tools/hbta_study.py
 python3 tools/vanersborg_study.py --fetch  # 550 MB download, deleted after
 python3 tools/vanersborg_study.py --exclude-erratic
+python3 tools/z24_study.py --extract     # archive from KU Leuven at data/z24/data-z24.zip
+python3 tools/z24_study.py
 ```
 
 Single-channel identification, optionally with a baseline and an FE

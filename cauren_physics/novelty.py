@@ -366,14 +366,15 @@ def alarm_summary(daily: dict[dt.date, float], reference_scores, alpha: float, s
     }
 
 
-def temperature_sensitivity_check(baseline: LinearBaseline, expected_df_over_f: float) -> list[dict]:
+def temperature_sensitivity_check(baseline: LinearBaseline, expected_df_over_f: float | None) -> list[dict]:
     """Relative frequency change per kelvin above and below the hinge, against a material-only estimate.
 
     Above the hinge the slope is the first coefficient; below it the hinge
     term adds to it. Frequencies should fall as temperature rises, so a
     physically plausible slope is negative. ``expected_df_over_f`` is the
     study's material-only sensitivity, about half of the relative change of
-    Young's modulus per kelvin since f scales with sqrt(E).
+    Young's modulus per kelvin since f scales with sqrt(E); ``None`` when the
+    structure has no single material-only value, and the ratio is omitted.
     """
     rows = []
     for frequency, (above, hinge) in zip(baseline.reference_frequencies_hz, baseline.coefficients):
@@ -384,7 +385,7 @@ def temperature_sensitivity_check(baseline: LinearBaseline, expected_df_over_f: 
                 "df_over_f_per_k_above": float(above_rel),
                 "df_over_f_per_k_below": float((above + hinge) / frequency),
                 "sign_ok": bool(above_rel < 0.0),
-                "ratio_to_material_only": float(above_rel / expected_df_over_f),
+                "ratio_to_material_only": None if expected_df_over_f is None else float(above_rel / expected_df_over_f),
             }
         )
     return rows
@@ -710,7 +711,7 @@ def run_protocol(
     temperature_c: np.ndarray,
     protocol: StudyProtocol,
     *,
-    expected_df_over_f: float,
+    expected_df_over_f: float | None,
     modes: list[int] | None = None,
     alpha: float = ALPHA,
     calibration: str = "leave_one_day_out",
@@ -731,6 +732,10 @@ def run_protocol(
         raise ValueError(f"unknown calibration {calibration!r}")
     reference = segment_mask(times, protocol.reference)
     modes = select_modes(frequencies_hz, reference) if modes is None else list(modes)
+    if not modes:
+        raise ValueError(
+            f"no mode is identified in at least {1 - MAX_REFERENCE_MISSING:.0%} of reference hours; pass modes explicitly"
+        )
     selected = frequencies_hz[:, modes]
     complete = np.all(np.isfinite(selected), axis=1) & np.isfinite(temperature_c)
     if environment is not None:

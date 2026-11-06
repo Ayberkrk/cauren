@@ -14,7 +14,7 @@ python3 -m pytest tests/
 The 34 tests in the minimal set need only `pytest`: no network, no
 numpy. Installing the optional study dependencies
 (`pip install -e '.[study]' timoshenko-engine`) brings the suite to
-69 total (see `tests/test_docs_match_test_count.py`, which fails CI if
+76 total (see `tests/test_docs_match_test_count.py`, which fails CI if
 these numbers drift from reality).
 
 Read `README.md` and the study pages in `docs/` first.

@@ -1,24 +1,24 @@
 # Results across bridges
 
-One protocol, three bridges. Every number here comes from
+One protocol, four bridges. Every number here comes from
 `cauren_physics/novelty.py` and the study scripts in `tools/`; the case
 study pages give the full tables, the data provenance and the limitations.
 
-## The three studies side by side
+## The four studies side by side
 
-| | KW51 | Hell Bridge Test Arena | Vänersborg |
-| --- | --- | --- | --- |
-| Structure | Steel bowstring railway bridge, Leuven | Riveted steel truss railway bridge, 35 m, near Trondheim | Riveted steel bascule railway bridge, south-west Sweden |
-| Known change | Strengthening of the diagonal connections (2019) | Eight imposed damage states: bolts removed in deck and bracing connections (2020) | Real fracture of a counterweight truss member (March 2023) |
-| Healthy reference | 130 days, October to March | One 16-minute shaker recording | 40 openings over 11 days |
-| Healthy holdout | 44 later days, warmer than the reference | One recording five days later | 17 later openings, colder nights than the reference |
-| Features | Hourly tracked frequencies, 5 modes | H1 FRF peaks per 60 s window, 5 modes | Strain change from closed at two leaf angles, 15 gauges |
-| Sample uncertainty | 0.08 to 0.49% of frequency per hour | 0.13 to 0.51% of frequency per window | Holdout shifts within 0.6 reference sigmas |
-| Unit scored, alpha | Day, 0.01 | 60 s window, 0.1 | Opening, 0.05 |
-| Healthy holdout alarms | 0 of 44 days, every arm | 13 of 13 windows (Mahalanobis, k-NN) | 0 of 17 (Mahalanobis), 5 of 17 (PCA) |
-| Change detected | Every post-retrofit day, every arm | Not separable from the healthy holdout | Pre-registered: no. Post hoc, one erratic gauge excluded: 6 of 6 (Mahalanobis), 1 healthy false alarm |
+| | KW51 | Hell Bridge Test Arena | Vänersborg | Z24 |
+| --- | --- | --- | --- | --- |
+| Structure | Steel bowstring railway bridge, Leuven | Riveted steel truss railway bridge, 35 m, near Trondheim | Riveted steel bascule railway bridge, south-west Sweden | Post-tensioned concrete box-girder road bridge, Switzerland |
+| Known change | Strengthening of the diagonal connections (2019) | Eight imposed damage states: bolts removed in deck and bracing connections (2020) | Real fracture of a counterweight truss member (March 2023) | Progressive damage before demolition: pier settlement, tilt, spalling, landslide, hinge and anchor failures (1998) |
+| Healthy reference | 130 days, October to March | One 16-minute shaker recording | 40 openings over 11 days | 180 days, November to June, with freezing spells |
+| Healthy holdout | 44 later days, warmer than the reference | One recording five days later | 17 later openings, colder nights than the reference | 26 summer days, slightly hotter than the reference |
+| Features | Hourly tracked frequencies, 5 modes | H1 FRF peaks per 60 s window, 5 modes | Strain change from closed at two leaf angles, 15 gauges | Hourly FDD frequencies tracked by shape, 4 modes |
+| Sample uncertainty | 0.08 to 0.49% of frequency per hour | 0.13 to 0.51% of frequency per window | Holdout shifts within 0.6 reference sigmas | 0.8 to 3.5% of frequency per hour |
+| Unit scored, alpha | Day, 0.01 | 60 s window, 0.1 | Opening, 0.05 | Day, 0.01 |
+| Healthy holdout alarms | 0 of 44 days, every arm | 13 of 13 windows (Mahalanobis, k-NN) | 0 of 17 (Mahalanobis), 5 of 17 (PCA) | 0 of 26 days, every arm but PCA (5 of 26) |
+| Change detected | Every post-retrofit day, every arm | Not separable from the healthy holdout | Pre-registered: no. Post hoc, one erratic gauge excluded: 6 of 6 (Mahalanobis), 1 healthy false alarm | k-NN 19 of 19 days from the first; Gaussian process 15, bilinear 13, raw 5 |
 
-## What the three bridges show together
+## What the four bridges show together
 
 1. **The healthy reference must span the variation the detector will
    meet.** KW51's 130 reference days cover a winter, so a 1% false-alarm
@@ -27,8 +27,10 @@ study pages give the full tables, the data provenance and the limitations.
    (up to 1.7%, 2.6 to 5.7 window sigmas) about fivefold, and every
    detector sensitive enough to see damage flags the next healthy session.
    On Vänersborg the PCA arm alarms on 29% of healthy openings, which
-   include nights colder than any reference opening. The conformal
-   guarantee holds only for data that resembles the reference.
+   include nights colder than any reference opening. Z24, whose reference
+   runs from November to June, kept every summer holdout day quiet in six
+   of seven arms. The conformal guarantee holds only for data that
+   resembles the reference.
 
 2. **The features can see damage that the detectors miss.** At Vänersborg
    the two gauges next to the crack moved by 5.4 and 4.0 reference sigmas,
@@ -42,8 +44,15 @@ study pages give the full tables, the data provenance and the limitations.
    into KW51's healthy holdout, cointegration and k nearest neighbours
    detect a 0.5% drop of the best-observed modes, and a 0.5% uniform drop
    of all modes, on at least 90% of days; the Mahalanobis arms need 1%,
-   with or without temperature normalization. Modes with the largest
+   with or without temperature normalization. On Z24's real damage, k
+   nearest neighbours was again the only arm to flag the smallest steps
+   (the first pier settlements) every day. Modes with the largest
    identification noise hide drops of up to 2% from almost every arm.
+
+   **Temperature normalization is what makes summer damage visible under a
+   winter-spanning reference.** On Z24, frozen asphalt raises the
+   frequencies by up to 2.6% per kelvin below 0 C; raw frequencies saw the
+   damage on 5 of 19 days, normalized ones on 13 to 15.
 
 4. **The retrofit alone ranks the arms differently from known drops.**
    Daily averaging of the residuals looked best on the small-shift retrofit
@@ -53,12 +62,15 @@ study pages give the full tables, the data provenance and the limitations.
    kind is not enough to choose a method.
 
 5. **More covariates and sequential tests do not fix a reference that is
-   too short.** Weather-station air temperature, humidity, radiation and
-   wind changed KW51's margins by less than 0.1. A CUSUM of daily evidence,
+   too short, but a sequential test pays off when the reference is long
+   enough.** Weather-station air temperature, humidity, radiation and wind
+   changed KW51's margins by less than 0.1. A CUSUM of daily evidence,
    calibrated for one false alarm a year on days like the reference, raised
-   a false alarm 19 to 23 days into the healthy holdout for six of seven
+   a false alarm 19 to 23 days into KW51's healthy holdout for six of seven
    arms: it accumulates the small, persistent difference between a warm
-   spring and the winter reference.
+   spring and the winter reference. On Z24, with a reference from November
+   to June, the same CUSUM raised no healthy alarm for five of seven arms
+   and reached the damage in 1 to 2 days.
 
 6. **Calibrate on held-out data.** Scoring reference samples with a model
    fitted on them understates how unusual new healthy data looks. On KW51
@@ -68,10 +80,10 @@ study pages give the full tables, the data provenance and the limitations.
 
 ## What is still missing
 
-- A bridge with real damage **and** a long healthy reference spanning the
-  seasons. Vänersborg comes closest but its reference covers 11 winter
-  days. Z24 has a year of monitoring before progressive damage tests;
-  access has been requested from KU Leuven.
+- A second bridge like Z24, with real damage **and** a healthy reference
+  spanning the seasons, to see whether its ranking of the arms holds. Z24's
+  damage was imposed on a bridge about to be demolished and during a test
+  campaign that also changed its excitation.
 - Other candidates checked:
 
   | Data set | Damage | Environment | Access | Fit |

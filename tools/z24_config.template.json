@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to data/z24/z24_config.json and fill in every field from the environmental monitoring system description in your own copy of the Z24 archive. That description is confidential; never commit the filled-in file.",
+  "channels": ["accelerometer suffix of each hourly .aaa file, for example the two digits before .aaa"],
+  "name_origin": "date of week one, day A in the WWDHH record names, ISO format",
+  "deck_temperatures": ["labels of the deck-top temperature columns in the .env files"],
+  "pavement_temperatures": ["labels of the pavement temperature columns"],
+  "air_temperature": "label of the air temperature column",
+  "humidity": "label of the relative humidity column",
+  "wind_speed": "label of the wind speed column",
+  "voltage_conversions": {
+    "label of a column recorded in volts": ["scale", "offset"]
+  }
+}
