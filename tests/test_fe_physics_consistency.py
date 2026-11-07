@@ -2,6 +2,7 @@ import math
 
 import pytest
 
+import cauren_physics.fe_reference_model as fe_reference_model
 from cauren_physics.fe_reference_model import ShearBuildingModel, model_consistency, natural_frequencies_hz
 from cauren_physics.oma import OMAResult, ModalParameter, compare_to_baseline, identify_modal_parameters
 
@@ -255,3 +256,49 @@ def test_model_consistency_stiffness_ratio_matches_timoshenko_update(monkeypatch
 
     assert delegated
     assert result["implied_uniform_stiffness_ratio"] == pytest.approx(updated.update_scale_factor, abs=0.01)
+
+
+def test_fallback_single_story_matches_closed_form(monkeypatch):
+    monkeypatch.setattr(fe_reference_model, "_shared_shear_building_frequencies", lambda *args: None)
+    model = ShearBuildingModel((50_000.0,), (8.0e6,))
+
+    assert natural_frequencies_hz(model) == pytest.approx(
+        (math.sqrt(8.0e6 / 50_000.0) / (2.0 * math.pi),), rel=1e-12
+    )
+
+
+def test_fallback_nonuniform_frequencies_match_numpy(monkeypatch):
+    np = pytest.importorskip("numpy")
+    monkeypatch.setattr(fe_reference_model, "_shared_shear_building_frequencies", lambda *args: None)
+    model = ShearBuildingModel(
+        (30_000.0, 18_000.0, 25_000.0, 12_000.0, 20_000.0),
+        (6.0e6, 3.0e6, 5.0e6, 2.0e6, 4.0e6),
+    )
+    inv_sqrt_mass = np.diag(1.0 / np.sqrt(np.diag(model.mass_matrix())))
+    normalized = inv_sqrt_mass @ np.array(model.stiffness_matrix()) @ inv_sqrt_mass
+    eigenvalues, _ = np.linalg.eigh(normalized)
+    expected = np.sqrt(eigenvalues) / (2.0 * math.pi)
+
+    actual = natural_frequencies_hz(model)
+
+    assert len(actual) == model.num_stories
+    assert list(actual) == sorted(actual)
+    assert all(frequency > 0.0 for frequency in actual)
+    assert actual == pytest.approx(expected, rel=1e-10, abs=1e-12)
+
+
+def test_fallback_nonuniform_frequencies_match_timoshenko(monkeypatch):
+    tm = pytest.importorskip("timoshenko")
+    model = ShearBuildingModel(
+        (30_000.0, 18_000.0, 25_000.0, 12_000.0, 20_000.0),
+        (6.0e6, 3.0e6, 5.0e6, 2.0e6, 4.0e6),
+    )
+    shared_model = tm.Structure(
+        story_masses_kg=model.story_masses_kg,
+        story_stiffness_n_m=model.story_stiffness_n_per_m,
+    )
+    monkeypatch.setattr(fe_reference_model, "_shared_shear_building_frequencies", lambda *args: None)
+
+    assert natural_frequencies_hz(model) == pytest.approx(
+        tuple(shared_model.natural_frequencies_hz), rel=1e-10, abs=1e-12
+    )
