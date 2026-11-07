@@ -311,3 +311,35 @@ def test_max_deviation_detector_sees_a_change_in_one_of_many_features():
     spread = np.full((1, 30), 1.2)
     detector = novelty.MaxDeviationDetector(training)
     assert detector.score(local)[0] > 4.0 > detector.score(spread)[0]
+
+
+def test_segment_mask_is_half_open():
+    times = [
+        dt.datetime(2024, 1, 1, 0, 0),  # before the segment
+        dt.datetime(2024, 1, 1, 5, 0),  # exactly start: included
+        dt.datetime(2024, 1, 1, 6, 0),  # inside
+        dt.datetime(2024, 1, 2, 0, 0),  # exactly end: excluded
+        dt.datetime(2024, 1, 2, 3, 0),  # after the segment
+    ]
+    mask = novelty.segment_mask(times, (times[1], times[3]))
+    assert mask.dtype == bool
+    assert mask.tolist() == [False, True, True, False, False]
+
+
+def test_segment_mask_empty_times_gives_empty_mask():
+    mask = novelty.segment_mask([], (dt.datetime(2024, 1, 1), dt.datetime(2024, 1, 2)))
+    assert mask.dtype == bool
+    assert mask.shape == (0,)
+
+
+def test_segment_mask_accepts_datetime64_arrays():
+    times = np.array(
+        ["2024-01-01T05:00", "2024-01-01T06:00", "2024-01-02T00:00", "2024-01-02T01:00"],
+        dtype="datetime64[m]",
+    )
+    segment = (dt.datetime(2024, 1, 1, 6, 0), dt.datetime(2024, 1, 2, 0, 0))
+    as_datetime64 = novelty.segment_mask(times, segment)
+    as_datetimes = [stamp.astype("datetime64[us]").item() for stamp in times]
+    assert as_datetime64.dtype == bool
+    assert as_datetime64.tolist() == [False, True, False, False]
+    assert novelty.segment_mask(as_datetimes, segment).tolist() == as_datetime64.tolist()
