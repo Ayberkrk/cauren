@@ -11,11 +11,13 @@ pip install -e '.[test]'
 python3 -m pytest tests/
 ```
 
-The 34 tests in the minimal set need only `pytest`: no network, no
-numpy. Installing the optional study dependencies
-(`pip install -e '.[study]' timoshenko-engine`) brings the suite to
-79 total (see `tests/test_docs_match_test_count.py`, which fails CI if
-these numbers drift from reality).
+The dependency-light modules define 37 tests; tests requiring optional
+packages are skipped when only `pytest` is installed. Across all modules
+there are 82 total test functions. These source counts are checked by
+`tests/test_docs_match_test_count.py`; parametrization and dependency-based
+skips mean they are not the number of passing pytest cases. Install the
+optional study dependencies (`pip install -e '.[study]' timoshenko-engine`)
+to exercise the optional paths. Tests use synthetic data, not the network.
 
 Read `README.md` and the study pages in `docs/` first.
 

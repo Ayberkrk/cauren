@@ -145,7 +145,7 @@ The four studies are compared in [Results across bridges](docs/results-summary.m
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 34 tests with pytest only (79 total with numpy, scipy and timoshenko-engine)
+python3 -m pytest tests/            # optional-dependency tests skip when packages are absent
 
 pip install -e '.[study]'           # numpy, scipy, h5py and pandas for the case studies
 python3 tools/kw51_study.py --download
@@ -158,6 +158,10 @@ python3 tools/vanersborg_study.py --exclude-erratic
 python3 tools/z24_study.py --extract     # archive from KU Leuven at data/z24/data-z24.zip
 python3 tools/z24_study.py
 ```
+
+The dependency-light modules define 37 tests, with 82 total test functions
+across the suite. These source counts exclude parametrization and include
+optional tests that may skip; they are not counts of passing pytest cases.
 
 Single-channel identification, optionally with a baseline and an FE
 model-consistency check:
