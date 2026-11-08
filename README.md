@@ -145,7 +145,7 @@ The four studies are compared in [Results across bridges](docs/results-summary.m
 
 ```bash
 pip install -e '.[test]'
-python3 -m pytest tests/            # 34 tests with pytest only (76 total with numpy, scipy and timoshenko-engine)
+python3 -m pytest tests/            # 34 tests with pytest only (79 total with numpy, scipy and timoshenko-engine)
 
 pip install -e '.[study]'           # numpy, scipy, h5py and pandas for the case studies
 python3 tools/kw51_study.py --download

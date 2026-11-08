@@ -69,7 +69,12 @@ class StudyProtocol:
 
 def segment_mask(times, segment: Segment) -> np.ndarray:
     start, end = segment
-    return np.array([start <= stamp < end for stamp in times], dtype=bool)
+    stamps = np.asarray(times)
+    if stamps.size == 0:
+        return np.zeros(0, dtype=bool)
+    if stamps.dtype.kind != "M":
+        stamps = stamps.astype("datetime64[us]")
+    return (stamps >= np.datetime64(start)) & (stamps < np.datetime64(end))
 
 
 def select_modes(frequencies_hz: np.ndarray, reference: np.ndarray, max_missing: float = MAX_REFERENCE_MISSING):
