@@ -1,1 +1,1 @@
-The dependency-light modules define 51 tests, with 96 total test functions across the suite. These source counts exclude parametrization and include optional tests that may skip; they are not counts of passing pytest cases.
+FULL_README_CONTENT_HERE
