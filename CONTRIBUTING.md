@@ -1,1 +1,1 @@
-PLACEHOLDER_CONTRIB
+The dependency-light modules define 51 tests; tests requiring optional packages are skipped when only `pytest` is installed. Across all modules there are 96 total test functions. These source counts are checked by `tests/test_docs_match_test_count.py`; parametrization and dependency-based skips mean they are not the number of passing pytest cases. Install the optional study dependencies (`pip install -e '.[study]' timoshenko-engine`) to exercise the optional paths. Tests use synthetic data, not the network.
