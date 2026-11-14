@@ -204,6 +204,16 @@ tag.
 
 See `CONTRIBUTING.md`.
 
+## Contributors
+
+Thanks to everyone who has contributed:
+
+<a href="https://github.com/Ayberkrk/cauren/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Ayberkrk/cauren" alt="Contributors" />
+</a>
+
+New here? The [good first issues](https://github.com/Ayberkrk/cauren/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) each come with a clear "done when" check, and questions are welcome in [Discussions](https://github.com/Ayberkrk/cauren/discussions). If the project is useful to you, a star helps others find it.
+
 ## License
 
 Apache 2.0. See `LICENSE`. Datasets keep their own licenses.
