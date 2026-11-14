@@ -159,7 +159,7 @@ python3 tools/z24_study.py --extract     # archive from KU Leuven at data/z24/da
 python3 tools/z24_study.py
 ```
 
-The dependency-light modules define 37 tests, with 82 total test functions
+The dependency-light modules define 51 tests, with 96 total test functions
 across the suite. These source counts exclude parametrization and include
 optional tests that may skip; they are not counts of passing pytest cases.
 
